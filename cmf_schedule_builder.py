@@ -607,7 +607,7 @@ if __name__ == "__main__":
 
     wb = openpyxl.load_workbook(FILE)
     protect_workbook_images(wb)
-    fix_main_image_anchors(wb["MAIN"])   # re-anchor every image (incl. manually pasted ones)
+    # Note: fix_main_image_anchors removed — caused image byte scrambling
 
     if "MAIN" not in wb.sheetnames:
         print("ERROR: No MAIN sheet. Run cmf_migrate_main.py first."); raise SystemExit(1)

@@ -75,22 +75,32 @@ IMG_H = 48
 
 # Station definitions: (key, display_name, hdr_hex, row_hex, [main_col_indices_1based])
 # Each station maps to one or more process-due-date columns
+# Color scheme — each station has a unique, distinct color grouped by workflow phase:
+#   PLANNING  → Blues      (Materials, Engineering)
+#   CUTTING   → Oranges    (Laser, SAW)
+#   FORMING   → Amber      (Bend)
+#   SUPPORT   → Teal/Cyan  (Clean, Accessories, Grind)
+#   WELDING   → Crimson    (Weld)
+#   OUTSIDE   → Purple     (Outside Process, Special)
+#   FINISHING → Green      (Paint)
+#   DONE      → Emerald    (Hardware, Assembly)
 STATIONS = [
-    ("MATERIALS",   "MATERIALS",                     "375623","E2EFDA", [12]),        # L
-    ("ENGINEERING", "ENGINEERING",                   "1F3864","DEEAF1", [13]),        # M
-    ("LASER",       "LASER CUTTING",                 "843C0C","FDEBD4", [14,15,16]),  # N O P
-    ("SAW",         "SAW / BANDSAW",                 "7B3F00","FCE4D6", [17,18]),     # Q R
-    ("FORMING",     "FORMING / BENDING",             "843C0C","FCE4D6", [19]),        # S
-    ("CLEAN",       "CLEANING",                      "595959","F2F2F2", [20]),        # T
-    ("ACCESSORIES", "CSK / DRILL / TAPPING",         "7030A0","EAD1F5", [21,22,23]), # U V W
-    ("GRIND",       "GRINDING",                      "595959","F2F2F2", [24]),        # X
-    ("WELDING",     "WELDING",                       "C00000","FFE0E0", [25]),        # Y
-    ("OUTSIDE",     "OUTSIDE PROCESS",               "1F4E79","DEEAF1", [26,27]),    # Z AA
-    ("PAINT",       "PAINT / POWDER COAT",           "833C00","FCE4D6", [28,29]),    # AB AC
-    ("SPECIAL",     "SPECIAL / WHOLE JOB (O)",       "595959","F2F2F2", [30,31,32]), # AD AE AF
-    ("HARDWARE",    "HARDWARE",                      "375623","E2EFDA", [33]),        # AG
-    ("ASSEMBLY",    "ASSEMBLY",                      "375623","E2EFDA", [34]),        # AH
-    ("SHIPPING",    "DELIVERY DATE",                 "1F3864","E2EFDA", [35]),        # AI
+    # key          display name              hdr       row       cols
+    ("MATERIALS",   "MATERIALS",            "1565C0","DBEAFE", [12]),        # L  — Steel Blue
+    ("ENGINEERING", "ENGINEERING",          "1E3A5F","EFF6FF", [13]),        # M  — Navy
+    ("LASER",       "LASER CUTTING",        "C2410C","FFF7ED", [14,15,16]),  # NOP — Deep Orange
+    ("SAW",         "SAW / BANDSAW",        "92400E","FEF3C7", [17,18]),     # QR  — Amber Brown
+    ("FORMING",     "FORMING / BENDING",    "B45309","FFFBEB", [19]),        # S   — Amber
+    ("CLEAN",       "CLEANING",             "0F766E","F0FDFA", [20]),        # T   — Teal
+    ("ACCESSORIES", "CSK / DRILL / TAPPING","6D28D9","F5F3FF", [21,22,23]), # UVW — Violet
+    ("GRIND",       "GRINDING",             "475569","F1F5F9", [24]),        # X   — Slate
+    ("WELDING",     "WELDING",              "991B1B","FFF1F2", [25]),        # Y   — Crimson
+    ("OUTSIDE",     "OUTSIDE PROCESS",      "5B21B6","FAF5FF", [26,27]),    # ZAA — Deep Purple
+    ("PAINT",       "PAINT / POWDER COAT",  "065F46","ECFDF5", [28,29]),    # ABAC — Emerald
+    ("SPECIAL",     "SPECIAL / WHOLE JOB",  "374151","F9FAFB", [30,31,32]), # ADAEAF — Gray
+    ("HARDWARE",    "HARDWARE",             "0E7490","ECFEFF", [33]),        # AG  — Cyan
+    ("ASSEMBLY",    "ASSEMBLY",             "14532D","F0FDF4", [34]),        # AH  — Forest Green
+    ("SHIPPING",    "DELIVERY DATE",        "1F3864","E2EFDA", [35]),        # AI  — Navy
 ]
 
 STATION_KEYS  = [s[0] for s in STATIONS]
@@ -280,7 +290,7 @@ def build_calendar(wb, entries, row_to_img):
     def item(row, entry, od):
         has_img = entry["main_row"] in row_to_img
         ws.row_dimensions[row].height = CAL_ROW_H_IMG if has_img else CAL_ROW_H
-        bg  = "FFD7D7" if od else CAL_STATION_COLOR.get(entry["s_key"], C_LGRAY)
+        bg  = "FCA5A5" if od else CAL_STATION_COLOR.get(entry["s_key"], C_LGRAY)
         dv  = entry.get("delivery_date")
         dv_str = f"{dv.month}/{dv.day}/{str(dv.year)[2:]}" if isinstance(dv, datetime) else (str(dv)[:8] if dv else "—")
         # Cols: STATION | COMPANY | WO# | PART# | QTY | CURRENT STEP | PROCESSES LEFT | DELIVERY DATE | PHOTO
@@ -453,7 +463,7 @@ def build_today(wb, entries, row_to_img):
             if idx < len(items):
                 e     = items[idx]
                 is_od = e["date"].date() < today
-                bg    = "FFD7D7" if is_od else C_YELLOW
+                bg    = "FCA5A5" if is_od else C_YELLOW
                 due_fg= "CC0000" if is_od else "806000"
 
                 vals = [e["wo"], e["company"],

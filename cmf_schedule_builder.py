@@ -239,12 +239,20 @@ def parse_main(ws):
 
 # ── CALENDAR ─────────────────────────────────────────────────────────────────
 #   STATION | COMPANY | WO# | PART# | QTY | CURRENT STEP | PROCESSES LEFT | DELIVERY DATE | PHOTO
-CAL_WIDTHS = [14,       20,     8,    18,    6,    16,             28,              11,              12]
-CAL_LABELS = ["STATION","COMPANY","WO #","PART #","QTY","CURRENT STEP","PROCESSES LEFT","DELIVERY DATE","PHOTO"]
-CAL_NCOLS  = len(CAL_WIDTHS)
-CAL_LAST   = get_column_letter(CAL_NCOLS)
-CAL_IMG_W  = 60;  CAL_IMG_H = 38
-CAL_ROW_H_IMG = 42;  CAL_ROW_H = 18
+# ── CALENDAR — Horizontal Kanban ─────────────────────────────────────────────
+# Columns = stations, items stacked under each station sorted by date.
+# Makes it easy for PM to see workstation loading and queue depth at a glance.
+#
+#  Row 1: Title
+#  Row 2: Overdue status banner
+#  Row 3: Station headers (colored, merged across sub-cols)
+#  Row 4: Sub-headers:  DUE | COMPANY | WO # | QTY  per station
+#  Row 5+: Items sorted date-ascending (overdue at top in coral)
+
+CAL_SUB    = [("DUE", 7), ("COMPANY", 12), ("WO #", 7), ("QTY", 5)]
+CAL_SUB_N  = len(CAL_SUB)   # 4 data cols
+CAL_DIV_W  = 1               # divider col between stations
+CAL_BLOCK  = CAL_SUB_N + CAL_DIV_W  # 5 cols total per station
 
 CAL_STATION_COLOR = {s[0]: s[3] for s in STATIONS}
 
@@ -254,114 +262,123 @@ def build_calendar(wb, entries, row_to_img):
     ws = wb.create_sheet("CALENDAR")
     today = datetime.now().date()
 
-    for col, w in enumerate(CAL_WIDTHS, 1):
-        ws.column_dimensions[get_column_letter(col)].width = w
+    # Active stations in defined display order (skip SHIPPING — delivery date is a column)
+    active = [s for s in STATIONS
+              if s[0] != "SHIPPING" and any(e["s_key"] == s[0] for e in entries)]
 
-    # Title
+    if not active:
+        ws["A1"] = "No scheduled work found."
+        print("  CALENDAR: no entries")
+        return
+
+    # Per-station items sorted by date (overdue first, then ascending)
+    station_items = {
+        s[0]: sorted([e for e in entries if e["s_key"] == s[0]], key=lambda e: e["date"])
+        for s in active
+    }
+    max_items  = max(len(v) for v in station_items.values())
+    total_cols = len(active) * CAL_BLOCK
+    last_col   = get_column_letter(total_cols)
+
+    # Assign column start position for each station and set column widths
+    station_start = {}
+    col = 1
+    for s in active:
+        station_start[s[0]] = col
+        for _, w in CAL_SUB:
+            ws.column_dimensions[get_column_letter(col)].width = w
+            col += 1
+        ws.column_dimensions[get_column_letter(col)].width = CAL_DIV_W
+        col += 1
+
+    # ── Row 1: Title ──────────────────────────────────────────────────────────
     ws.row_dimensions[1].height = 30
-    ws.merge_cells(f"A1:{CAL_LAST}1")
+    ws.merge_cells(f"A1:{last_col}1")
     c = ws["A1"]
-    c.value = f"CMF  PRODUCTION CALENDAR   —   {today.strftime('%B %d, %Y')}"
-    c.font  = _font(bold=True, color=C_WHITE, size=14)
-    c.fill  = _fill(C_NAVY); c.alignment = _align()
+    c.value     = f"CMF  PRODUCTION CALENDAR   —   {today.strftime('%B %d, %Y')}"
+    c.font      = _font(bold=True, color=C_WHITE, size=14)
+    c.fill      = _fill(C_NAVY); c.alignment = _align()
 
-    # Column headers
-    ws.row_dimensions[2].height = 18
-    for col, lbl in enumerate(CAL_LABELS, 1):
-        c = ws.cell(2, col, lbl)
-        c.font = _font(bold=True, size=10, color=C_WHITE)
-        c.fill = _fill(C_STEEL_DK); c.border = _border(); c.alignment = _align()
-
-    cur = 3
-
-    def banner(row, text, bg, fg, h=22):
-        ws.row_dimensions[row].height = h
-        ws.merge_cells(f"A{row}:{CAL_LAST}{row}")
-        c = ws.cell(row, 1, text)
-        c.font = _font(bold=True, color=fg, size=12)
-        c.fill = _fill(bg); c.alignment = _align(h="left")
-
-    def item(row, entry, od):
-        has_img = entry["main_row"] in row_to_img
-        ws.row_dimensions[row].height = CAL_ROW_H_IMG if has_img else CAL_ROW_H
-        bg  = "FCA5A5" if od else CAL_STATION_COLOR.get(entry["s_key"], C_LGRAY)
-        dv  = entry.get("delivery_date")
-        dv_str = f"{dv.month}/{dv.day}/{str(dv.year)[2:]}" if isinstance(dv, datetime) else (str(dv)[:8] if dv else "—")
-        # Cols: STATION | COMPANY | WO# | PART# | QTY | CURRENT STEP | PROCESSES LEFT | DELIVERY DATE | PHOTO
-        vals = [
-            STATION_NAME.get(entry["s_key"], entry["s_key"]),  # 1 station
-            entry["company"],                                   # 2 company
-            entry["wo"],                                        # 3 WO#
-            entry["part_no"],                                   # 4 Part#
-            entry["qty"],                                       # 5 QTY
-            entry.get("current_step", "—"),                    # 6 current step
-            entry.get("processes_left", "—"),                  # 7 processes left
-            dv_str,                                             # 8 delivery date
-            None,                                               # 9 photo
-        ]
-        for col, val in enumerate(vals, 1):
-            c = ws.cell(row, col, val)
-            c.fill = _fill(bg); c.border = _border("BBBBBB")
-            c.font = _font(size=10, bold=(col == 8 and od))  # bold delivery date if overdue
-            if col == 8 and od:  # overdue delivery date → red text
-                c.font = _font(size=10, bold=True, color="CC0000")
-            c.alignment = _align(h="left" if col in (1, 2, 7) else "center")
-        if has_img:
-            copy_image(row_to_img[entry["main_row"]], ws, 9, row)
-
-    # ── Overdue section — always visible so PM can see status at a glance ──────
-    overdue = sorted([e for e in entries if e["date"].date() < today], key=lambda e: e["date"])
-    if overdue:
-        banner(cur, f"  ⚠  OVERDUE  —  {len(overdue)} process step(s) past due  —  check what is holding these up", "C00000", C_WHITE, 30)
-        cur += 1
-        # Column sub-header for overdue section
-        ws.row_dimensions[cur].height = 16
-        for col, lbl in enumerate(CAL_LABELS, 1):
-            c = ws.cell(cur, col, lbl)
-            c.font = _font(bold=True, size=9, color="CC0000")
-            c.fill = _fill("FFE8E8"); c.border = _border("EE9999"); c.alignment = _align()
-        cur += 1
-        for e in overdue:
-            item(cur, e, True); cur += 1
+    # ── Row 2: Overdue status banner ─────────────────────────────────────────
+    overdue_count = sum(1 for e in entries if e["date"].date() < today)
+    ws.row_dimensions[2].height = 26
+    ws.merge_cells(f"A2:{last_col}2")
+    c = ws["A2"]
+    if overdue_count:
+        c.value = (f"  ⚠  {overdue_count} OVERDUE process step(s)  —  "
+                   f"shown in red at the top of each station column")
+        c.font  = _font(bold=True, color=C_WHITE, size=11)
+        c.fill  = _fill("C00000")
     else:
-        # Always show the overdue banner even when clear
-        banner(cur, "  ✅  NO OVERDUE PROCESSES  —  all steps on track", "375623", C_WHITE, 26)
-    cur += 1
+        c.value = "  ✅  NO OVERDUE PROCESSES  —  all steps on track"
+        c.font  = _font(bold=True, color=C_WHITE, size=11)
+        c.fill  = _fill("375623")
+    c.alignment = _align(h="left")
 
-    by_date = defaultdict(list)
-    for e in entries:
-        if e["date"].date() >= today:
-            by_date[e["date"].date()].append(e)
+    # ── Row 3: Station headers ────────────────────────────────────────────────
+    ws.row_dimensions[3].height = 36
+    for s in active:
+        sc       = station_start[s[0]]
+        last_sub = get_column_letter(sc + CAL_SUB_N - 1)
+        ws.merge_cells(f"{get_column_letter(sc)}3:{last_sub}3")
+        c = ws.cell(3, sc)
+        n = len(station_items[s[0]])
+        od = sum(1 for e in station_items[s[0]] if e["date"].date() < today)
+        c.value     = f"  {STATION_NAME[s[0]].upper()}  ({n})" + (f"  ⚠{od}" if od else "")
+        c.font      = _font(bold=True, color=C_WHITE, size=12)
+        c.fill      = _fill(STATION_HDR_C[s[0]]); c.alignment = _align(h="left")
+        # Divider
+        ws.cell(3, sc + CAL_SUB_N).fill = _fill("D0D0D0")
 
-    shown, d = 0, today
-    while shown < 28:   # 4 full weeks including weekends
-        shown += 1
-        is_weekend = d.weekday() >= 5   # Sat=5, Sun=6
-        day_entries = sorted(by_date.get(d, []),
-                             key=lambda e: STATION_KEYS.index(e["s_key"]) if e["s_key"] in STATION_KEYS else 99)
-        if not day_entries and d != today:
-            d += timedelta(days=1); continue
-        is_today   = (d == today)
-        # Weekends get a warm gray banner so they're visually distinct from weekdays
-        bg  = C_STEEL_DK if is_today else ("78716C" if is_weekend else "6D6D6D")
-        txt = f"  {'TODAY  ·  ' if is_today else ''}{d.strftime('%A  %B %d').upper()}"
-        if is_weekend and not is_today:
-            txt += "  (WEEKEND)"
-        banner(cur, txt, bg, C_WHITE, 28 if is_today else 22); cur += 1
-        if day_entries:
-            for e in day_entries: item(cur, e, False); cur += 1
-        else:
-            ws.row_dimensions[cur].height = 16
-            ws.merge_cells(f"A{cur}:{CAL_LAST}{cur}")
-            c = ws.cell(cur, 1, "     — nothing scheduled today —")
-            c.font = _font(size=10, color="888888")
-            c.fill = _fill("F5F5F5"); c.alignment = _align(h="left")
-            cur += 1
-            cur += 1
-        d += timedelta(days=1)
+    # ── Row 4: Sub-headers ────────────────────────────────────────────────────
+    ws.row_dimensions[4].height = 16
+    for s in active:
+        sc = station_start[s[0]]
+        for i, (lbl, _) in enumerate(CAL_SUB):
+            c = ws.cell(4, sc + i, lbl)
+            c.font      = _font(bold=True, size=9, color=C_DGRAY)
+            c.fill      = _fill(STATION_ROW_C[s[0]])
+            c.border    = _border("AAAAAA"); c.alignment = _align()
+        ws.cell(4, sc + CAL_SUB_N).fill = _fill("D0D0D0")
 
-    ws.freeze_panes = "A3"
-    print(f"  CALENDAR: {len(entries)} entries  ({len(overdue)} overdue)")
+    # ── Rows 5+: Item cards ───────────────────────────────────────────────────
+    for item_idx in range(max_items):
+        row = 5 + item_idx
+        ws.row_dimensions[row].height = 18
+
+        for s in active:
+            sc    = station_start[s[0]]
+            items = station_items[s[0]]
+
+            if item_idx < len(items):
+                e      = items[item_idx]
+                is_od  = e["date"].date() < today
+                days   = (e["date"].date() - today).days
+                is_soon= not is_od and days <= 7
+                bg     = "FCA5A5" if is_od else (C_YELLOW if is_soon else STATION_ROW_C[s[0]])
+                due_fg = "CC0000" if is_od else (C_DGRAY)
+
+                due_str = f"{e['date'].month}/{e['date'].day}"
+                vals    = [due_str, e["company"], e["wo"], e["qty"]]
+                for i, val in enumerate(vals):
+                    c = ws.cell(row, sc + i, val)
+                    c.fill      = _fill(bg)
+                    c.border    = _border("CCCCCC")
+                    c.alignment = _align(h="left" if i == 1 else "center")
+                    if i == 0:   c.font = _font(bold=True, size=10, color=due_fg)
+                    elif i == 1: c.font = _font(bold=True, size=10)
+                    else:        c.font = _font(size=10)
+            else:
+                # Empty slot — fill with station color to show column boundary
+                for i in range(CAL_SUB_N):
+                    c = ws.cell(row, sc + i)
+                    c.fill   = _fill(STATION_ROW_C[s[0]])
+                    c.border = _border("DDDDDD")
+
+            ws.cell(row, sc + CAL_SUB_N).fill = _fill("D0D0D0")
+
+    ws.freeze_panes = "A5"
+    print(f"  CALENDAR: {len(entries)} entries across {len(active)} stations  ({overdue_count} overdue)")
 
 
 # ── TODAY — Kanban board ──────────────────────────────────────────────────────

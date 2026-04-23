@@ -201,7 +201,7 @@ def parse_main(ws):
         remaining = []
         for c in range(12, 35):
             v = ws.cell(row, c).value
-            if v and isinstance(v, datetime) and c >= (curr_step_col or 0) and c in COL_TO_PROCESS:
+            if v and isinstance(v, datetime) and c in COL_TO_PROCESS and (curr_step_date is None or v >= curr_step_date):
                 remaining.append((v, COL_TO_PROCESS[c]))
         remaining.sort(key=lambda x: x[0])   # sort by date, not column order
         processes_left = " → ".join(name for _, name in remaining) or "—"

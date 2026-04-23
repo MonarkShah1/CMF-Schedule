@@ -334,26 +334,29 @@ def build_calendar(wb, entries, row_to_img):
             by_date[e["date"].date()].append(e)
 
     shown, d = 0, today
-    while shown < 20:
-        if d.weekday() < 5:
-            shown += 1
-            day_entries = sorted(by_date.get(d, []),
-                                 key=lambda e: STATION_KEYS.index(e["s_key"]) if e["s_key"] in STATION_KEYS else 99)
-            if not day_entries and d != today:
-                d += timedelta(days=1); continue
-            is_today = (d == today)
-            bg  = C_STEEL_DK if is_today else "6D6D6D"
-            txt = f"  {'TODAY  ·  ' if is_today else ''}{d.strftime('%A  %B %d').upper()}"
-            banner(cur, txt, bg, C_WHITE, 28 if is_today else 22); cur += 1
-            if day_entries:
-                for e in day_entries: item(cur, e, False); cur += 1
-            else:
-                ws.row_dimensions[cur].height = 16
-                ws.merge_cells(f"A{cur}:{CAL_LAST}{cur}")
-                c = ws.cell(cur, 1, "     — nothing scheduled today —")
-                c.font = _font(size=10, color="888888")
-                c.fill = _fill("F5F5F5"); c.alignment = _align(h="left")
-                cur += 1
+    while shown < 28:   # 4 full weeks including weekends
+        shown += 1
+        is_weekend = d.weekday() >= 5   # Sat=5, Sun=6
+        day_entries = sorted(by_date.get(d, []),
+                             key=lambda e: STATION_KEYS.index(e["s_key"]) if e["s_key"] in STATION_KEYS else 99)
+        if not day_entries and d != today:
+            d += timedelta(days=1); continue
+        is_today   = (d == today)
+        # Weekends get a warm gray banner so they're visually distinct from weekdays
+        bg  = C_STEEL_DK if is_today else ("78716C" if is_weekend else "6D6D6D")
+        txt = f"  {'TODAY  ·  ' if is_today else ''}{d.strftime('%A  %B %d').upper()}"
+        if is_weekend and not is_today:
+            txt += "  (WEEKEND)"
+        banner(cur, txt, bg, C_WHITE, 28 if is_today else 22); cur += 1
+        if day_entries:
+            for e in day_entries: item(cur, e, False); cur += 1
+        else:
+            ws.row_dimensions[cur].height = 16
+            ws.merge_cells(f"A{cur}:{CAL_LAST}{cur}")
+            c = ws.cell(cur, 1, "     — nothing scheduled today —")
+            c.font = _font(size=10, color="888888")
+            c.fill = _fill("F5F5F5"); c.alignment = _align(h="left")
+            cur += 1
             cur += 1
         d += timedelta(days=1)
 

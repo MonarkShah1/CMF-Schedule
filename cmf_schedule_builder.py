@@ -201,23 +201,44 @@ def parse_main(ws):
         if not isinstance(delivery_date, datetime):
             delivery_date = None
 
-        # Compute "PROCESSES LEFT": remaining steps sorted by their actual due date
+        # Compute "PROCESSES LEFT" sorted by actual due date
         remaining = []
         for c in range(12, 35):
             v = ws.cell(row, c).value
             if v and isinstance(v, datetime) and c in COL_TO_PROCESS and (curr_step_date is None or v >= curr_step_date):
                 remaining.append((v, COL_TO_PROCESS[c]))
-        remaining.sort(key=lambda x: x[0])   # sort by date, not column order
+        remaining.sort(key=lambda x: x[0])
         processes_left = " → ".join(name for _, name in remaining) or "—"
+
+        # Compute "next step date" — smallest date strictly after curr_step_date
+        # Used to determine NEXT UP vs WAITING labels on kanban cards
+        if curr_step_date:
+            dates_after = [v for c in range(12, 35)
+                           for v in [ws.cell(row, c).value]
+                           if v and isinstance(v, datetime) and v > curr_step_date]
+            next_step_date = min(dates_after) if dates_after else None
+        else:
+            next_step_date = None
 
         for s_key, s_name, _, _, col_indices in STATIONS:
             if s_key == "SHIPPING":
-                continue    # delivery date is now a column, not a calendar event
+                continue
             for col_idx in col_indices:
                 due = ws.cell(row, col_idx).value
                 if not due or not isinstance(due, datetime): continue
                 if curr_step_date and due < curr_step_date:
                     continue    # already done
+
+                # Step status label for kanban card
+                if curr_step_date is None:
+                    step_status = ""               # not started — no label
+                elif due == curr_step_date:
+                    step_status = "▶ NOW"          # this IS the current step
+                elif next_step_date and due == next_step_date:
+                    step_status = "NEXT"           # immediately up after current
+                else:
+                    step_status = "WAIT"           # further down the queue
+
                 entries.append(dict(
                     main_row      = row,
                     date          = due,
@@ -232,6 +253,7 @@ def parse_main(ws):
                     current_step  = curr_raw or "—",
                     processes_left= processes_left,
                     delivery_date = delivery_date,
+                    step_status   = step_status,
                 ))
 
     return entries, row_to_img
@@ -249,10 +271,13 @@ def parse_main(ws):
 #  Row 4: Sub-headers:  DUE | COMPANY | WO # | QTY  per station
 #  Row 5+: Items sorted date-ascending (overdue at top in coral)
 
-CAL_SUB    = [("DUE", 7), ("COMPANY", 12), ("WO #", 7), ("QTY", 5)]
-CAL_SUB_N  = len(CAL_SUB)   # 4 data cols
+CAL_SUB    = [("STATUS", 8), ("DUE", 6), ("COMPANY", 11), ("WO #", 6), ("PHOTO", 11)]
+CAL_SUB_N  = len(CAL_SUB)   # 5 data cols
 CAL_DIV_W  = 1               # divider col between stations
-CAL_BLOCK  = CAL_SUB_N + CAL_DIV_W  # 5 cols total per station
+CAL_BLOCK  = CAL_SUB_N + CAL_DIV_W  # 6 cols total per station
+CAL_ROW_H  = 52              # tall enough for photo thumbnails
+CAL_IMG_W  = 68              # photo width in pixels
+CAL_IMG_H  = 44              # photo height in pixels
 
 CAL_STATION_COLOR = {s[0]: s[3] for s in STATIONS}
 
@@ -344,32 +369,55 @@ def build_calendar(wb, entries, row_to_img):
     # ── Rows 5+: Item cards ───────────────────────────────────────────────────
     for item_idx in range(max_items):
         row = 5 + item_idx
-        ws.row_dimensions[row].height = 18
+        ws.row_dimensions[row].height = CAL_ROW_H
 
         for s in active:
             sc    = station_start[s[0]]
             items = station_items[s[0]]
 
             if item_idx < len(items):
-                e      = items[item_idx]
-                is_od  = e["date"].date() < today
-                days   = (e["date"].date() - today).days
-                is_soon= not is_od and days <= 7
-                bg     = "FCA5A5" if is_od else (C_YELLOW if is_soon else STATION_ROW_C[s[0]])
-                due_fg = "CC0000" if is_od else (C_DGRAY)
-
+                e       = items[item_idx]
+                is_od   = e["date"].date() < today
+                days    = (e["date"].date() - today).days
+                is_soon = not is_od and days <= 7
+                bg      = "FCA5A5" if is_od else (C_YELLOW if is_soon else STATION_ROW_C[s[0]])
+                due_fg  = "CC0000" if is_od else C_DGRAY
+                status  = e.get("step_status", "")
                 due_str = f"{e['date'].month}/{e['date'].day}"
-                vals    = [due_str, e["company"], e["wo"], e["qty"]]
+
+                # STATUS | DUE | COMPANY | WO# | PHOTO
+                vals = [status, due_str, e["company"], e["wo"], None]
                 for i, val in enumerate(vals):
                     c = ws.cell(row, sc + i, val)
-                    c.fill      = _fill(bg)
                     c.border    = _border("CCCCCC")
-                    c.alignment = _align(h="left" if i == 1 else "center")
-                    if i == 0:   c.font = _font(bold=True, size=10, color=due_fg)
-                    elif i == 1: c.font = _font(bold=True, size=10)
-                    else:        c.font = _font(size=10)
+                    c.alignment = _align(h="left" if i == 2 else "center")
+
+                    if i == 0:      # STATUS label — coloured independently
+                        if status == "▶ NOW":
+                            c.fill = _fill("DBEAFE")
+                            c.font = _font(bold=True, size=9, color="1E40AF")
+                        elif status == "NEXT":
+                            c.fill = _fill("DCFCE7")
+                            c.font = _font(bold=True, size=9, color="166534")
+                        elif status == "WAIT":
+                            c.fill = _fill("F3F4F6")
+                            c.font = _font(size=9, color="9CA3AF")
+                        else:
+                            c.fill = _fill(bg); c.font = _font(size=9)
+                    elif i == 1:    # DUE date
+                        c.fill = _fill(bg)
+                        c.font = _font(bold=True, size=10, color=due_fg)
+                    elif i == 2:    # COMPANY
+                        c.fill = _fill(bg)
+                        c.font = _font(bold=True, size=10)
+                    else:           # WO# and PHOTO placeholder
+                        c.fill = _fill(bg); c.font = _font(size=10)
+
+                # Screenshot in PHOTO column (sub-col index 4 = sc+4)
+                if e["main_row"] in row_to_img:
+                    copy_image(row_to_img[e["main_row"]], ws, sc + 4, row)
             else:
-                # Empty slot — fill with station color to show column boundary
+                # Empty slot
                 for i in range(CAL_SUB_N):
                     c = ws.cell(row, sc + i)
                     c.fill   = _fill(STATION_ROW_C[s[0]])

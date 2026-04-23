@@ -124,27 +124,22 @@ def protect_workbook_images(wb):
             _protect_image(img)
 
 
-def copy_image(src_img, dest_ws, col_1idx, row_1idx):
+def copy_image(raw_bytes, dest_ws, col_1idx, row_1idx):
     """
-    Copy image using TwoCellAnchor(editAs='twoCell') so it moves AND collapses
-    with its row when filtering — fixes the floating-image filter bug.
-    col_1idx, row_1idx are 1-based Excel coordinates.
+    Place a copy of raw_bytes as an image in dest_ws at (col_1idx, row_1idx).
+    Accepts raw bytes (as stored in row_to_img) — never touches MAIN images.
+    Uses TwoCellAnchor so image moves with its row.
     """
     from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor, AnchorMarker
     try:
-        ref = src_img.ref
-        if hasattr(ref, 'read'):
-            ref.seek(0); raw = ref.read()
-        else:
-            raw = src_img._data()
-        buf = _UnclosableBytesIO(raw)
+        buf = _UnclosableBytesIO(raw_bytes)
         img = XLImage(buf)
         c0, r0 = col_1idx - 1, row_1idx - 1
-        anchor          = TwoCellAnchor()
-        anchor.editAs   = 'twoCell'           # image hides when row is filtered/hidden
-        anchor._from    = AnchorMarker(col=c0,   colOff=0, row=r0,   rowOff=0)
-        anchor.to       = AnchorMarker(col=c0+1, colOff=0, row=r0+1, rowOff=0)
-        img.anchor = anchor
+        anchor        = TwoCellAnchor()
+        anchor.editAs = 'twoCell'
+        anchor._from  = AnchorMarker(col=c0,   colOff=0, row=r0,   rowOff=0)
+        anchor.to     = AnchorMarker(col=c0+1, colOff=0, row=r0+1, rowOff=0)
+        img.anchor    = anchor
         dest_ws.add_image(img)
         return True
     except Exception:
@@ -154,16 +149,28 @@ def copy_image(src_img, dest_ws, col_1idx, row_1idx):
 # ── Parse MAIN ────────────────────────────────────────────────────────────────
 def parse_main(ws):
     """Returns (entries, row_to_image).
-    entries: list of dicts — one per process-due-date filled in MAIN.
-    row_to_image: {main_row_1indexed: Image}
+    entries:     list of dicts — one per process-due-date filled in MAIN.
+    row_to_img:  {main_row_1indexed: raw_bytes}  — bytes copied out of MAIN
+                 so the original image objects are never touched during
+                 calendar/today builds or saves.  MAIN photos are safe.
     """
     entries    = []
     row_to_img = {}
 
-    # Build image map
+    # Read image bytes once — store raw bytes, NOT the image object.
+    # This completely decouples MAIN images from anything the script writes.
     for img in ws._images:
         try:
-            row_to_img[img.anchor._from.row + 1] = img
+            excel_row = img.anchor._from.row + 1
+            ref = img.ref
+            if hasattr(ref, 'read'):
+                ref.seek(0)
+                raw = ref.read()
+                ref.seek(0)   # reset so save can still read it
+            else:
+                raw = img._data()
+            if raw:
+                row_to_img[excel_row] = raw   # bytes only, no image reference
         except Exception:
             pass
 

@@ -124,48 +124,6 @@ def protect_workbook_images(wb):
             _protect_image(img)
 
 
-def fix_main_image_anchors(ws):
-    """
-    Re-anchor every image in MAIN to TwoCellAnchor(editAs='twoCell') so images
-    move and collapse with their row when filtering.
-
-    Catches both images we placed and ones the engineer pasted manually.
-    Note: Excel floating images still don't perfectly hide on filter — this is
-    the closest standard .xlsx allows. True in-cell images require Excel 365's
-    'Place in Cell' feature which openpyxl doesn't yet support.
-    """
-    from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor, AnchorMarker
-    new_imgs = []
-    for img in ws._images:
-        try:
-            ref = img.ref
-            if hasattr(ref, 'read'): ref.seek(0); raw = ref.read()
-            else: raw = img._data()
-
-            a = img.anchor
-            if hasattr(a, '_from'):
-                c0, r0 = a._from.col, a._from.row
-            elif hasattr(a, 'col'):
-                c0, r0 = a.col, a.row
-            else:
-                new_imgs.append(img); continue
-
-            buf     = _UnclosableBytesIO(raw)
-            new_img = XLImage(buf)
-            anchor  = TwoCellAnchor()
-            anchor.editAs = 'twoCell'
-            anchor._from  = AnchorMarker(col=c0,   colOff=0, row=r0,   rowOff=0)
-            anchor.to     = AnchorMarker(col=c0+1, colOff=0, row=r0+1, rowOff=0)
-            new_img.anchor = anchor
-            new_imgs.append(new_img)
-        except Exception:
-            new_imgs.append(img)
-
-    ws._images = []
-    for img in new_imgs:
-        ws.add_image(img)
-
-
 def copy_image(src_img, dest_ws, col_1idx, row_1idx):
     """
     Copy image using TwoCellAnchor(editAs='twoCell') so it moves AND collapses
@@ -607,7 +565,6 @@ if __name__ == "__main__":
 
     wb = openpyxl.load_workbook(FILE)
     protect_workbook_images(wb)
-    # Note: fix_main_image_anchors removed — caused image byte scrambling
 
     if "MAIN" not in wb.sheetnames:
         print("ERROR: No MAIN sheet. Run cmf_migrate_main.py first."); raise SystemExit(1)

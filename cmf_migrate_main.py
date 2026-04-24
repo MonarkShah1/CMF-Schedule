@@ -90,26 +90,27 @@ COLS = [
     ("AF", "W.JOB\n(O)",   6,  True ),
     ("AG", "HW",           6,  True ),
     ("AH", "ASSM",         6,  True ),
-    ("AI", "DELIVERY\nDATE",8, True ),
+    ("AI", "SHIP TO\nVENDOR", 6, True ),   # new — date when parts ship to vendor
+    ("AJ", "DELIVERY\nDATE",  8, True ),   # shifted from AI
     # ── Status ────────────────────────────────────────────────────────────
-    ("AJ", "CURRENT\nSTEP", 18,  False),
-    ("AK", "STATUS",        12,  False),
-    ("AL", "NOTES",         35,  False),
+    ("AK", "CURRENT\nSTEP", 18,  False),   # shifted from AJ
+    ("AL", "STATUS",        12,  False),   # shifted from AK
+    ("AM", "NOTES",         35,  False),   # shifted from AL
 ]
-NCOLS = len(COLS)     # 38
-LAST  = "AL"
+NCOLS = len(COLS)     # 39
+LAST  = "AM"
 HDR   = 2
 DATA  = 3
 
 # Blue column range for conditional formatting
 BLUE_FIRST = 12   # col L (1-indexed)
-BLUE_LAST  = 35   # col AI (1-indexed)
+BLUE_LAST  = 36   # col AJ (1-indexed, shifted from 35)
 
 STEP_LIST = (
     "MATERIALS,ENGINEERING,LASER CUT,LASER CUT (O),TUBE LASER (O),"
     "SAW,BANDSAW (O),BEND,CLEAN,CSK,DRILL,TAPPING,GRIND,WELD,"
     "MACHINE (O),PLATING (O),PAINT,PAINT (O),"
-    "SPECIAL,SPECIAL (O),WHOLE JOB (O),HARDWARE,ASSEMBLY,SHIP,RECEIVING,"
+    "SPECIAL,SPECIAL (O),WHOLE JOB (O),HARDWARE,ASSEMBLY,SHIP TO VENDOR,SHIP,RECEIVING,"
     "COMPLETE,ON HOLD"
 )
 
@@ -179,16 +180,16 @@ def write_part_row(ws, row, wo, po, company, pno, desc, qty, mat, thk,
     ws.row_dimensions[row].height = PART_ROW_H
     bg = C_LGRAY if alt else C_WHITE
     # A  B  C       D     E     F    G     H    I(screenshot)  J    K
-    # --- 24 process cols L–AI (12 blue cols, idx 12-35) ---    AJ   AK   AL
-    # Cols A–AL = 38 total.  Carefully one None per blue process col that's blank.
-    # L(12)–W(23) = 12 cols, X(24)–AI(35) = 12 cols, ship_due goes at AI=col 35.
+    # --- 25 process cols L–AJ (idx 12-36) ---    AK   AL   AM
+    # Cols A–AM = 39 total.  One None per blue process col that's blank.
+    # AI=col 35 = SHIP TO VENDOR (new, blank).  AJ=col 36 = DELIVERY DATE (ship_due).
     vals = [
-        wo, po, company, None, None,                        # A–E   (5)
-        pno, desc, qty, None, mat, thk,                     # F–K   (6)  I=screenshot
-        None,None,None,None,None,None,None,None,            # L–S   (8)  MATERIALS→BEND
-        None,None,None,None,None,None,                      # T–Y   (6)  CLEAN→WELD
-        None,None,None,None,None,None,None,None,None,ship_due,  # Z–AI  (9 N + ship_due = 10 cols: Z→AI)
-        current, None, notes,                               # AJ–AL (3)
+        wo, po, company, None, None,                              # A–E   (5)
+        pno, desc, qty, None, mat, thk,                           # F–K   (6)  I=screenshot
+        None,None,None,None,None,None,None,None,                  # L–S   (8)  MATERIALS→BEND
+        None,None,None,None,None,None,                            # T–Y   (6)  CLEAN→WELD
+        None,None,None,None,None,None,None,None,None,None,ship_due,# Z–AJ (10 N + ship_due = 11 cols)
+        current, None, notes,                                     # AK–AM (3)
     ]
     # Verify length == NCOLS at runtime (silent — remove if confident)
     assert len(vals) == NCOLS, f"vals len {len(vals)} != NCOLS {NCOLS}"
@@ -199,7 +200,7 @@ def write_part_row(ws, row, wo, po, company, pno, desc, qty, mat, thk,
         c.fill      = _fill(C_BLUE_LT if (is_blue and val is None) else
                             (C_WHITE   if is_blue else bg))
         c.font      = _font(bold=(i in (1,2,3)), size=10)
-        c.alignment = _align(h="left" if i in (3,6,7,38) else "center")
+        c.alignment = _align(h="left" if i in (3,6,7,39) else "center")
         if isinstance(val, datetime): c.number_format = "M/D/YY"
 
 
@@ -220,7 +221,7 @@ def apply_cf(ws, last_row):
 def apply_dropdown(ws, last_row):
     dv = DataValidation(type="list", formula1=f'"{STEP_LIST}"',
                         allow_blank=True, showErrorMessage=False)
-    dv.sqref = f"AJ{DATA}:AJ{last_row}"
+    dv.sqref = f"AK{DATA}:AK{last_row}"   # CURRENT STEP shifted to AK
     ws.add_data_validation(dv)
 
 

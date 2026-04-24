@@ -37,8 +37,8 @@ COL_PARTNO       = 6    # F
 COL_DESC         = 7    # G
 COL_QTY          = 8    # H
 COL_SCREENSHOT   = 9    # I
-COL_CURRENT_STEP = 36   # AJ
-COL_STATUS       = 37   # AK
+COL_CURRENT_STEP = 37   # AK  (shifted after SHIP TO VENDOR col inserted at AI/35)
+COL_STATUS       = 38   # AL
 HDR_ROW          = 2
 DATA_START       = 3
 
@@ -51,7 +51,7 @@ COL_TO_PROCESS = {
     20:"CLEAN",      21:"CSK",         22:"DRILL",      23:"TAPPING",
     24:"GRIND",      25:"WELD",        26:"MACHINE(O)", 27:"PLATING(O)",
     28:"PAINT",      29:"PAINT(O)",    30:"SPECIAL",    31:"SPECIAL(O)",
-    32:"W.JOB(O)",   33:"HARDWARE",    34:"ASSEMBLY",
+    32:"W.JOB(O)",   33:"HARDWARE",    34:"ASSEMBLY",   35:"SHIP VNDR",
 }
 
 STEP_TO_COL = {
@@ -66,7 +66,8 @@ STEP_TO_COL = {
     "SPECIAL": 30,       "SPECIAL (O)": 31,
     "WHOLE JOB (O)": 32, "WHOLE JOB": 32,
     "HARDWARE": 33,      "ASSEMBLY": 34,
-    "SHIP": 35,          "DELIVERY DATE": 35,
+    "SHIP TO VENDOR": 35,
+    "SHIP": 36,          "DELIVERY DATE": 36,
     "COMPLETE": 99,      "DONE": 99,  "SHIPPED": 99,
 }
 
@@ -74,27 +75,34 @@ IMG_W = 85   # copy same size from migration
 IMG_H = 48
 
 # Station definitions: (key, display_name, hdr_hex, row_hex, [main_col_indices_1based])
-# Each station maps to one or more process-due-date columns
-# Bold, saturated row colors — each station immediately distinct at a glance.
-# Row colors use medium saturation (not pale pastels, not too dark for text).
-# Headers use a deeper shade of the same hue.
+# Each station maps to one or more process-due-date columns.
+# ORDER: in-house processes first, then outside (vendor) processes.
+# In-house and outside variants of the same process type are separate stations
+# so they never share a calendar column.
 STATIONS = [
-    # key          display name              hdr       row(bold)  cols
+    # ── IN-HOUSE ──────────────────────────────────────────────────────────────
+    # key            display name               hdr       row        cols
     ("MATERIALS",   "MATERIALS",            "1D4ED8","BAE6FD", [12]),        # L   Sky Blue
     ("ENGINEERING", "ENGINEERING",          "3730A3","C7D2FE", [13]),        # M   Indigo
-    ("LASER",       "LASER CUTTING",        "C2410C","FED7AA", [14,15,16]),  # NOP Orange
-    ("SAW",         "SAW / BANDSAW",        "92400E","FDE68A", [17,18]),     # QR  Amber
+    ("LASER_IN",    "LASER CUTTING",        "C2410C","FED7AA", [14]),        # N   Orange
+    ("SAW_IN",      "SAW",                  "92400E","FDE68A", [17]),        # Q   Amber
     ("FORMING",     "FORMING / BENDING",    "A16207","FEF08A", [19]),        # S   Yellow
     ("CLEAN",       "CLEANING",             "065F46","A7F3D0", [20]),        # T   Mint Green
     ("ACCESSORIES", "CSK / DRILL / TAPPING","6B21A8","E9D5FF", [21,22,23]), # UVW Purple
     ("GRIND",       "GRINDING",             "334155","CBD5E1", [24]),        # X   Slate
     ("WELDING",     "WELDING",              "B91C1C","FECACA", [25]),        # Y   Red
-    ("OUTSIDE",     "OUTSIDE PROCESS",      "5B21B6","DDD6FE", [26,27]),    # ZAA Violet
-    ("PAINT",       "PAINT / POWDER COAT",  "15803D","BBF7D0", [28,29]),    # ABAC Green
-    ("SPECIAL",     "SPECIAL / WHOLE JOB",  "374151","D1D5DB", [30,31,32]), # ADAEAF Gray
+    ("SPECIAL_IN",  "SPECIAL",              "374151","D1D5DB", [30]),        # AD  Gray
     ("HARDWARE",    "HARDWARE",             "0E7490","A5F3FC", [33]),        # AG  Cyan
     ("ASSEMBLY",    "ASSEMBLY",             "166534","D9F99D", [34]),        # AH  Lime
-    ("SHIPPING",    "DELIVERY DATE",        "1F3864","E2EFDA", [35]),        # AI  Navy
+    ("SHIP_VENDOR", "SHIP TO VENDOR",       "0F766E","99F6E4", [35]),        # AI  Teal
+    # ── OUTSIDE (VENDOR) ──────────────────────────────────────────────────────
+    ("LASER_OUT",   "LASER CUT / TUBE (OUTSIDE)","EA580C","FFEDD5", [15,16]),# OP  Orange-lite
+    ("SAW_OUT",     "BANDSAW (OUTSIDE)",    "B45309","FEF3C7", [18]),        # R   Amber-lite
+    ("OUTSIDE",     "OUTSIDE MACHINE",      "5B21B6","DDD6FE", [26]),       # Z   Violet
+    ("PAINT",       "PAINT / POWDER COAT / PLATE","15803D","BBF7D0",[27,28,29]),# AAABAC Green
+    ("SPECIAL_OUT", "SPECIAL / WHOLE JOB (OUTSIDE)","4B5563","E5E7EB",[31,32]),# AEAF Gray-lite
+    # ── REFERENCE — not rendered as a calendar station ────────────────────────
+    ("SHIPPING",    "DELIVERY DATE",        "1F3864","E2EFDA", [36]),        # AJ  Navy
 ]
 
 STATION_KEYS  = [s[0] for s in STATIONS]
@@ -144,6 +152,36 @@ def copy_image(raw_bytes, dest_ws, col_1idx, row_1idx):
         return True
     except Exception:
         return False
+
+
+# ── Auto-migration: insert SHIP TO VENDOR column if workbook predates it ──────
+def ensure_ship_vendor_col(ws):
+    """
+    If MAIN was created before the SHIP TO VENDOR column was added, insert a
+    blank column at position 35 (AI) so that DELIVERY DATE shifts to AJ and
+    all subsequent column numbers stay consistent with the current constants.
+    Safe to call every run — it's a no-op if the column already exists.
+    """
+    header_val = str(ws.cell(HDR_ROW, 35).value or "").strip().upper().replace("\n", " ")
+    if "SHIP TO" in header_val:
+        return  # already migrated
+
+    print("  AUTO-MIGRATION: inserting SHIP TO VENDOR column at AI (col 35) ...")
+    ws.insert_cols(35)
+
+    hdr_cell = ws.cell(HDR_ROW, 35)
+    hdr_cell.value     = "SHIP TO\nVENDOR"
+    hdr_cell.font      = Font(name="Calibri", bold=True, color="FFFFFF", size=9)
+    hdr_cell.fill      = PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
+    hdr_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    hdr_cell.border    = Border(
+        left=Side(style="thin", color="CCCCCC"),
+        right=Side(style="thin", color="CCCCCC"),
+        top=Side(style="thin", color="CCCCCC"),
+        bottom=Side(style="thin", color="CCCCCC"),
+    )
+    ws.column_dimensions[get_column_letter(35)].width = 6
+    print("  AUTO-MIGRATION: done — no further action needed.")
 
 
 # ── Parse MAIN ────────────────────────────────────────────────────────────────
@@ -203,29 +241,19 @@ def parse_main(ws):
         if curr_raw in ("COMPLETE", "DONE", "SHIPPED"):
             continue
 
-        # Delivery date (col AI = 35) — shown as a column, not a calendar event
-        delivery_date = ws.cell(row, 35).value
+        # Delivery date (col AJ = 36, shifted from AI=35 after SHIP TO VENDOR inserted)
+        delivery_date = ws.cell(row, 36).value
         if not isinstance(delivery_date, datetime):
             delivery_date = None
 
-        # Compute "PROCESSES LEFT" sorted by actual due date
+        # Compute "PROCESSES LEFT" sorted by actual due date (cols 12–35 inclusive)
         remaining = []
-        for c in range(12, 35):
+        for c in range(12, 36):
             v = ws.cell(row, c).value
             if v and isinstance(v, datetime) and c in COL_TO_PROCESS and (curr_step_date is None or v >= curr_step_date):
                 remaining.append((v, COL_TO_PROCESS[c]))
         remaining.sort(key=lambda x: x[0])
         processes_left = " → ".join(name for _, name in remaining) or "—"
-
-        # Compute "next step date" — smallest date strictly after curr_step_date
-        # Used to determine NEXT UP vs WAITING labels on kanban cards
-        if curr_step_date:
-            dates_after = [v for c in range(12, 35)
-                           for v in [ws.cell(row, c).value]
-                           if v and isinstance(v, datetime) and v > curr_step_date]
-            next_step_date = min(dates_after) if dates_after else None
-        else:
-            next_step_date = None
 
         for s_key, s_name, _, _, col_indices in STATIONS:
             if s_key == "SHIPPING":
@@ -236,15 +264,15 @@ def parse_main(ws):
                 if curr_step_date and due < curr_step_date:
                     continue    # already done
 
-                # Step status label for kanban card
+                # Step status label — 2 states only:
+                #   ▶ READY  = operator can work on this right now
+                #   ⏳ <step> = still waiting; shows what's blocking
                 if curr_step_date is None:
                     step_status = ""               # not started — no label
                 elif due == curr_step_date:
-                    step_status = "▶ NOW"          # this IS the current step
-                elif next_step_date and due == next_step_date:
-                    step_status = "NEXT"           # immediately up after current
+                    step_status = "▶ READY"        # this IS the current step
                 else:
-                    step_status = "WAIT"           # further down the queue
+                    step_status = f"⏳ {curr_raw[:10]}"  # blocked by current step
 
                 entries.append(dict(
                     main_row      = row,
@@ -278,7 +306,7 @@ def parse_main(ws):
 #  Row 4: Sub-headers: STATUS | DUE | COMPANY | WO # | QTY | PHOTO per station
 #  Row 5+: Items sorted date-ascending (overdue at top in coral)
 
-CAL_SUB    = [("STATUS", 8), ("DUE", 6), ("COMPANY", 11), ("WO #", 6), ("QTY", 7), ("PHOTO", 11)]
+CAL_SUB    = [("STATUS", 8), ("DUE", 6), ("SHIP", 6), ("COMPANY", 11), ("WO #", 6), ("QTY", 7), ("PHOTO", 11)]
 CAL_SUB_N  = len(CAL_SUB)   # 6 data cols
 CAL_DIV_W  = 1               # divider col between stations
 CAL_BLOCK  = CAL_SUB_N + CAL_DIV_W  # data cols + divider per station
@@ -392,37 +420,39 @@ def build_calendar(wb, entries, row_to_img):
                 status  = e.get("step_status", "")
                 due_str = f"{e['date'].month}/{e['date'].day}"
 
-                # STATUS | DUE | COMPANY | WO# | QTY | PHOTO
-                vals = [status, due_str, e["company"], e["wo"], e["qty"], None]
+                # STATUS | DUE | SHIP | COMPANY | WO# | QTY | PHOTO
+                dd = e.get("delivery_date")
+                ship_str = f"{dd.month}/{dd.day}" if dd else "—"
+                vals = [status, due_str, ship_str, e["company"], e["wo"], e["qty"], None]
                 for i, val in enumerate(vals):
                     c = ws.cell(row, sc + i, val)
                     c.border    = _border("CCCCCC")
-                    c.alignment = _align(h="left" if i == 2 else "center")
+                    c.alignment = _align(h="left" if i == 3 else "center")
 
                     if i == 0:      # STATUS label — coloured independently
-                        if status == "▶ NOW":
+                        if status == "▶ READY":
                             c.fill = _fill("DBEAFE")
                             c.font = _font(bold=True, size=9, color="1E40AF")
-                        elif status == "NEXT":
-                            c.fill = _fill("DCFCE7")
-                            c.font = _font(bold=True, size=9, color="166534")
-                        elif status == "WAIT":
+                        elif status.startswith("⏳"):
                             c.fill = _fill("F3F4F6")
-                            c.font = _font(size=9, color="9CA3AF")
+                            c.font = _font(size=9, color="6B7280")
                         else:
                             c.fill = _fill(bg); c.font = _font(size=9)
                     elif i == 1:    # DUE date
                         c.fill = _fill(bg)
                         c.font = _font(bold=True, size=10, color=due_fg)
-                    elif i == 2:    # COMPANY
+                    elif i == 2:    # SHIP date
+                        c.fill = _fill(bg)
+                        c.font = _font(size=9, color="6B7280")
+                    elif i == 3:    # COMPANY
                         c.fill = _fill(bg)
                         c.font = _font(bold=True, size=10)
                     else:           # WO#, QTY, and PHOTO placeholder
                         c.fill = _fill(bg); c.font = _font(size=10)
 
-                # Screenshot in PHOTO column (sub-col index 5 = sc+5)
+                # Screenshot in PHOTO column (sub-col index 6 = sc+6)
                 if e["main_row"] in row_to_img:
-                    copy_image(row_to_img[e["main_row"]], ws, sc + 5, row)
+                    copy_image(row_to_img[e["main_row"]], ws, sc + 6, row)
             else:
                 # Empty slot
                 for i in range(CAL_SUB_N):
@@ -575,6 +605,9 @@ if __name__ == "__main__":
 
     if "MAIN" not in wb.sheetnames:
         print("ERROR: No MAIN sheet. Run cmf_migrate_main.py first."); raise SystemExit(1)
+
+    print("Checking MAIN column layout ...")
+    ensure_ship_vendor_col(wb["MAIN"])
 
     print("Parsing MAIN ...")
     entries, row_to_img = parse_main(wb["MAIN"])

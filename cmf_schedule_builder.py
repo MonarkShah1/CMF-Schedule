@@ -267,7 +267,7 @@ def parse_main(ws):
 
 
 # ── CALENDAR ─────────────────────────────────────────────────────────────────
-#   STATION | COMPANY | WO# | PART# | QTY | CURRENT STEP | PROCESSES LEFT | DELIVERY DATE | PHOTO
+#   STATUS | DUE | COMPANY | WO# | QTY | PHOTO
 # ── CALENDAR — Horizontal Kanban ─────────────────────────────────────────────
 # Columns = stations, items stacked under each station sorted by date.
 # Makes it easy for PM to see workstation loading and queue depth at a glance.
@@ -275,13 +275,13 @@ def parse_main(ws):
 #  Row 1: Title
 #  Row 2: Overdue status banner
 #  Row 3: Station headers (colored, merged across sub-cols)
-#  Row 4: Sub-headers:  DUE | COMPANY | WO # | QTY  per station
+#  Row 4: Sub-headers: STATUS | DUE | COMPANY | WO # | QTY | PHOTO per station
 #  Row 5+: Items sorted date-ascending (overdue at top in coral)
 
-CAL_SUB    = [("STATUS", 8), ("DUE", 6), ("COMPANY", 11), ("WO #", 6), ("PHOTO", 11)]
-CAL_SUB_N  = len(CAL_SUB)   # 5 data cols
+CAL_SUB    = [("STATUS", 8), ("DUE", 6), ("COMPANY", 11), ("WO #", 6), ("QTY", 7), ("PHOTO", 11)]
+CAL_SUB_N  = len(CAL_SUB)   # 6 data cols
 CAL_DIV_W  = 1               # divider col between stations
-CAL_BLOCK  = CAL_SUB_N + CAL_DIV_W  # 6 cols total per station
+CAL_BLOCK  = CAL_SUB_N + CAL_DIV_W  # data cols + divider per station
 CAL_ROW_H  = 52              # tall enough for photo thumbnails
 CAL_IMG_W  = 68              # photo width in pixels
 CAL_IMG_H  = 44              # photo height in pixels
@@ -392,8 +392,8 @@ def build_calendar(wb, entries, row_to_img):
                 status  = e.get("step_status", "")
                 due_str = f"{e['date'].month}/{e['date'].day}"
 
-                # STATUS | DUE | COMPANY | WO# | PHOTO
-                vals = [status, due_str, e["company"], e["wo"], None]
+                # STATUS | DUE | COMPANY | WO# | QTY | PHOTO
+                vals = [status, due_str, e["company"], e["wo"], e["qty"], None]
                 for i, val in enumerate(vals):
                     c = ws.cell(row, sc + i, val)
                     c.border    = _border("CCCCCC")
@@ -417,12 +417,12 @@ def build_calendar(wb, entries, row_to_img):
                     elif i == 2:    # COMPANY
                         c.fill = _fill(bg)
                         c.font = _font(bold=True, size=10)
-                    else:           # WO# and PHOTO placeholder
+                    else:           # WO#, QTY, and PHOTO placeholder
                         c.fill = _fill(bg); c.font = _font(size=10)
 
-                # Screenshot in PHOTO column (sub-col index 4 = sc+4)
+                # Screenshot in PHOTO column (sub-col index 5 = sc+5)
                 if e["main_row"] in row_to_img:
-                    copy_image(row_to_img[e["main_row"]], ws, sc + 4, row)
+                    copy_image(row_to_img[e["main_row"]], ws, sc + 5, row)
             else:
                 # Empty slot
                 for i in range(CAL_SUB_N):

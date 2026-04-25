@@ -209,8 +209,8 @@ def copy_main_sheet(wb_src, wb_dst):
     for mc in ws_src.merged_cells.ranges:
         ws_dst.merge_cells(str(mc))
 
-    # Freeze panes, auto-filter
-    ws_dst.freeze_panes = ws_src.freeze_panes
+    # Freeze panes — always lock just the two header rows regardless of source view
+    ws_dst.freeze_panes = "A3"
     if ws_src.auto_filter.ref:
         ws_dst.auto_filter.ref = ws_src.auto_filter.ref
 

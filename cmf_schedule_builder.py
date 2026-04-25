@@ -71,6 +71,23 @@ STEP_TO_COL = {
     "COMPLETE": 99,      "DONE": 99,  "SHIPPED": 99,
 }
 
+# Maps process column → canonical CURRENT STEP name used in the dropdown.
+# Used by apply_completions() to write the correct step name after advancing.
+_COL_TO_DROPDOWN_STEP = {
+    12: "MATERIALS",     13: "ENGINEERING",
+    14: "LASER CUT",     15: "LASER CUT (O)",  16: "TUBE LASER (O)",
+    17: "SAW",           18: "BANDSAW (O)",
+    19: "BEND",          20: "CLEAN",
+    21: "CSK",           22: "DRILL",           23: "TAPPING",
+    24: "GRIND",         25: "WELD",
+    26: "MACHINE (O)",   27: "PLATING (O)",
+    28: "PAINT",         29: "PAINT (O)",
+    30: "SPECIAL",       31: "SPECIAL (O)",
+    32: "WHOLE JOB (O)", 33: "HARDWARE",
+    34: "ASSEMBLY",      35: "SHIP TO VENDOR",
+    36: "SHIP",
+}
+
 IMG_W = 85   # copy same size from migration
 IMG_H = 48
 
@@ -262,7 +279,10 @@ def parse_main(ws):
                 due = ws.cell(row, col_idx).value
                 if not due or not isinstance(due, datetime): continue
                 if curr_step_date and due < curr_step_date:
-                    continue    # already done
+                    continue    # already done: earlier date
+                if (curr_step_date and due == curr_step_date
+                        and curr_step_col and col_idx < curr_step_col):
+                    continue    # already done: same date, earlier process column
 
                 # Step status label — 2 states only:
                 #   ▶ READY  = operator can work on this right now
@@ -306,8 +326,8 @@ def parse_main(ws):
 #  Row 4: Sub-headers: STATUS | DUE | COMPANY | WO # | QTY | PHOTO per station
 #  Row 5+: Items sorted date-ascending (overdue at top in coral)
 
-CAL_SUB    = [("STATUS", 8), ("DUE", 6), ("SHIP", 6), ("COMPANY", 11), ("WO #", 6), ("QTY", 7), ("PHOTO", 11)]
-CAL_SUB_N  = len(CAL_SUB)   # 6 data cols
+CAL_SUB    = [("_ID", 0.5), ("STATUS", 8), ("DUE", 6), ("SHIP", 6), ("COMPANY", 11), ("WO #", 6), ("QTY", 7), ("PHOTO", 11)]
+CAL_SUB_N  = len(CAL_SUB)   # 8 sub-cols (first is hidden row ID)
 CAL_DIV_W  = 1               # divider col between stations
 CAL_BLOCK  = CAL_SUB_N + CAL_DIV_W  # data cols + divider per station
 CAL_ROW_H  = 52              # tall enough for photo thumbnails
@@ -395,10 +415,15 @@ def build_calendar(wb, entries, row_to_img):
     for s in active:
         sc = station_start[s[0]]
         for i, (lbl, _) in enumerate(CAL_SUB):
-            c = ws.cell(4, sc + i, lbl)
-            c.font      = _font(bold=True, size=9, color=C_DGRAY)
-            c.fill      = _fill(STATION_ROW_C[s[0]])
-            c.border    = _border("AAAAAA"); c.alignment = _align()
+            if lbl == "_ID":        # hidden ID column — blank header, no border
+                c = ws.cell(4, sc + i, "")
+                c.fill = _fill(STATION_ROW_C[s[0]])
+                c.font = _font(size=6, color=STATION_ROW_C[s[0]])
+            else:
+                c = ws.cell(4, sc + i, lbl)
+                c.font      = _font(bold=True, size=9, color=C_DGRAY)
+                c.fill      = _fill(STATION_ROW_C[s[0]])
+                c.border    = _border("AAAAAA"); c.alignment = _align()
         ws.cell(4, sc + CAL_SUB_N).fill = _fill("D0D0D0")
 
     # ── Rows 5+: Item cards ───────────────────────────────────────────────────
@@ -420,16 +445,23 @@ def build_calendar(wb, entries, row_to_img):
                 status  = e.get("step_status", "")
                 due_str = f"{e['date'].month}/{e['date'].day}"
 
-                # STATUS | DUE | SHIP | COMPANY | WO# | QTY | PHOTO
+                # _ID | STATUS | DUE | SHIP | COMPANY | WO# | QTY | PHOTO
                 dd = e.get("delivery_date")
                 ship_str = f"{dd.month}/{dd.day}" if dd else "—"
-                vals = [status, due_str, ship_str, e["company"], e["wo"], e["qty"], None]
+                id_val = f"{e['main_row']}|{e['s_key']}"
+                vals = [id_val, status, due_str, ship_str, e["company"], e["wo"], e["qty"], None]
                 for i, val in enumerate(vals):
                     c = ws.cell(row, sc + i, val)
-                    c.border    = _border("CCCCCC")
-                    c.alignment = _align(h="left" if i == 3 else "center")
 
-                    if i == 0:      # STATUS label — coloured independently
+                    if i == 0:      # hidden ID — invisible text, no border
+                        c.fill = _fill(bg)
+                        c.font = _font(size=6, color=bg)
+                        continue
+
+                    c.border    = _border("CCCCCC")
+                    c.alignment = _align(h="left" if i == 4 else "center")
+
+                    if i == 1:      # STATUS label — coloured independently
                         if status == "▶ READY":
                             c.fill = _fill("DBEAFE")
                             c.font = _font(bold=True, size=9, color="1E40AF")
@@ -438,27 +470,28 @@ def build_calendar(wb, entries, row_to_img):
                             c.font = _font(size=9, color="6B7280")
                         else:
                             c.fill = _fill(bg); c.font = _font(size=9)
-                    elif i == 1:    # DUE date
+                    elif i == 2:    # DUE date
                         c.fill = _fill(bg)
                         c.font = _font(bold=True, size=10, color=due_fg)
-                    elif i == 2:    # SHIP date
+                    elif i == 3:    # SHIP date
                         c.fill = _fill(bg)
                         c.font = _font(size=9, color="6B7280")
-                    elif i == 3:    # COMPANY
+                    elif i == 4:    # COMPANY
                         c.fill = _fill(bg)
                         c.font = _font(bold=True, size=10)
                     else:           # WO#, QTY, and PHOTO placeholder
                         c.fill = _fill(bg); c.font = _font(size=10)
 
-                # Screenshot in PHOTO column (sub-col index 6 = sc+6)
+                # Screenshot in PHOTO column (sub-col index 7 = sc+7)
                 if e["main_row"] in row_to_img:
-                    copy_image(row_to_img[e["main_row"]], ws, sc + 6, row)
+                    copy_image(row_to_img[e["main_row"]], ws, sc + 7, row)
             else:
-                # Empty slot
+                # Empty slot — skip border on hidden ID column
                 for i in range(CAL_SUB_N):
                     c = ws.cell(row, sc + i)
-                    c.fill   = _fill(STATION_ROW_C[s[0]])
-                    c.border = _border("DDDDDD")
+                    c.fill = _fill(STATION_ROW_C[s[0]])
+                    if i > 0:
+                        c.border = _border("DDDDDD")
 
             ws.cell(row, sc + CAL_SUB_N).fill = _fill("D0D0D0")
 
@@ -594,6 +627,286 @@ def build_today(wb, entries, row_to_img):
     print(f"  TODAY: {len(due_entries)} items across {len(active)} stations ({img_count} with photos)")
 
 
+# ── Green-completion sync ─────────────────────────────────────────────────────
+
+def _is_user_green(cell):
+    """Return True if the cell has a user-applied green fill (any shade).
+
+    Detection rule: G > B by 30+, G > R, and the colour is not a pale pastel
+    (avg brightness < 200).  This correctly catches olive/army greens like
+    Excel's 'Olive Green, Accent 3' (8FAF46 / 9BBB59) while ignoring our own
+    pastel template fills (D9F99D, A7F3D0, BBF7D0, etc.) which all have
+    average brightness > 200.
+    """
+    try:
+        fill = cell.fill
+        if not fill or fill.fill_type != "solid":
+            return False
+        rgb = fill.fgColor.rgb or ""
+        if len(rgb) == 8:           # ARGB  e.g. "FF9BBB59"
+            r = int(rgb[2:4], 16); g = int(rgb[4:6], 16); b = int(rgb[6:8], 16)
+        elif len(rgb) == 6:         # RGB   e.g. "9BBB59"
+            r = int(rgb[0:2], 16); g = int(rgb[2:4], 16); b = int(rgb[4:6], 16)
+        else:
+            return False
+        avg = (r + g + b) // 3
+        return (g - b) > 30 and g > r and avg < 200
+    except Exception:
+        return False
+
+
+def sync_green_completions(wb):
+    """Scan existing CALENDAR for rows the PM highlighted green.
+
+    Each station block's first sub-column (_ID) stores "main_row|s_key".
+    If any visible cell in that block has a user-green fill we record it.
+
+    Must be called BEFORE build_calendar() deletes the sheet.
+    Returns list of {"main_row": int, "s_key": str}.
+    """
+    if "CALENDAR" not in wb.sheetnames:
+        return []
+
+    ws   = wb["CALENDAR"]
+    seen = set()
+    found = []
+
+    for row in range(5, ws.max_row + 1):
+        col = 1
+        while col <= ws.max_column:
+            id_val = str(ws.cell(row, col).value or "")
+            if "|" in id_val:
+                # Any visible cell in this block green?
+                block_green = any(
+                    _is_user_green(ws.cell(row, col + offset))
+                    for offset in range(1, CAL_SUB_N)
+                )
+                if block_green:
+                    parts = id_val.split("|", 1)
+                    if len(parts) == 2:
+                        try:
+                            key = (int(parts[0]), parts[1])
+                            if key not in seen:
+                                seen.add(key)
+                                found.append({"main_row": key[0], "s_key": key[1]})
+                        except ValueError:
+                            pass
+            col += CAL_BLOCK   # jump to next station block
+
+    print(f"  GREEN-SYNC: {len(found)} completion(s) detected in CALENDAR")
+    return found
+
+
+def apply_completions(ws_main, completions):
+    """Advance CURRENT_STEP in MAIN for every green-marked item.
+
+    For each completed station:
+      1. Find the latest scheduled date among that station's columns.
+      2. Scan remaining process columns for the next earliest date.
+      3. Write the canonical step name to CURRENT_STEP (col AK).
+      4. If nothing remains, mark COMPLETE.
+
+    Returns list of record dicts for the LOG sheet.
+    """
+    if not completions:
+        return []
+
+    records = []
+    today   = datetime.now()
+
+    for comp in completions:
+        main_row = comp["main_row"]
+        s_key    = comp["s_key"]
+
+        station_def = next((s for s in STATIONS if s[0] == s_key), None)
+        if station_def is None:
+            continue
+        col_indices     = station_def[4]
+        completed_cols  = set(col_indices)
+
+        # Pull context from MAIN
+        wo           = ws_main.cell(main_row, COL_WO).value
+        company      = str(ws_main.cell(main_row, COL_COMPANY).value or "")
+        part_no      = str(ws_main.cell(main_row, COL_PARTNO).value or "")
+        desc         = str(ws_main.cell(main_row, COL_DESC).value or "")
+        delivery_raw = ws_main.cell(main_row, 36).value
+        delivery_dt  = delivery_raw if isinstance(delivery_raw, datetime) else None
+
+        # Completed date = latest date in this station's column(s)
+        completed_date = None
+        for c in col_indices:
+            v = ws_main.cell(main_row, c).value
+            if isinstance(v, datetime):
+                if completed_date is None or v > completed_date:
+                    completed_date = v
+        if completed_date is None:
+            continue
+
+        # Next step: earliest remaining process date, skipping completed cols.
+        # Same-date steps at a higher column number are still "next" (not done).
+        max_completed_col = max(col_indices)
+        remaining = []
+        for c in range(12, 36):
+            if c in completed_cols:
+                continue
+            v = ws_main.cell(main_row, c).value
+            if not isinstance(v, datetime) or c not in _COL_TO_DROPDOWN_STEP:
+                continue
+            if v > completed_date or (v == completed_date and c > max_completed_col):
+                remaining.append((v, c))
+        remaining.sort()
+
+        if remaining:
+            _, next_col = remaining[0]
+            next_step   = _COL_TO_DROPDOWN_STEP[next_col]
+            ws_main.cell(main_row, COL_CURRENT_STEP).value = next_step
+        else:
+            next_step = "COMPLETE"
+            ws_main.cell(main_row, COL_CURRENT_STEP).value = "COMPLETE"
+            ws_main.cell(main_row, COL_STATUS).value       = "COMPLETE"
+
+        label = STATION_NAME.get(s_key, s_key)
+        print(f"    WO {wo}  [{label}]  →  {next_step}")
+
+        records.append(dict(
+            date_completed = today,
+            wo             = wo,
+            company        = company,
+            part_no        = part_no,
+            desc           = desc,
+            process        = label,
+            due_date       = completed_date,
+            next_step      = next_step,
+            delivery_date  = delivery_dt,
+        ))
+
+    return records
+
+
+# ── Completion LOG sheet ──────────────────────────────────────────────────────
+
+_LOG_COLS = [
+    ("DATE",          10),
+    ("WO #",           8),
+    ("COMPANY",       20),
+    ("PART #",        14),
+    ("DESCRIPTION",   26),
+    ("PROCESS DONE",  22),
+    ("WAS DUE",       10),
+    ("NEXT STEP",     18),
+    ("DELIVERY DATE", 14),
+]
+_LOG_NCOLS    = len(_LOG_COLS)          # 9
+_LOG_LAST_COL = get_column_letter(_LOG_NCOLS)  # "I"
+
+
+def _init_log_sheet(ws):
+    ws.row_dimensions[1].height = 30
+    ws.merge_cells(f"A1:{_LOG_LAST_COL}1")
+    c = ws["A1"]
+    c.value     = "CMF  PRODUCTION LOG  —  Completed Processes"
+    c.font      = _font(bold=True, color=C_WHITE, size=13)
+    c.fill      = _fill(C_NAVY); c.alignment = _align(h="left")
+
+    ws.row_dimensions[2].height = 16
+    for i, (lbl, w) in enumerate(_LOG_COLS, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+        c = ws.cell(2, i, lbl)
+        c.font      = _font(bold=True, color=C_WHITE, size=9)
+        c.fill      = _fill(C_STEEL_DK)
+        c.border    = _border(); c.alignment = _align()
+
+    ws.freeze_panes = "A3"
+
+
+def _write_log_date_banner(ws, row, date_str):
+    ws.merge_cells(f"A{row}:{_LOG_LAST_COL}{row}")
+    c = ws.cell(row, 1, f"  {date_str}")
+    c.font      = _font(bold=True, color=C_WHITE, size=10)
+    c.fill      = _fill(C_STEEL_DK); c.alignment = _align(h="left")
+    ws.row_dimensions[row].height = 18
+
+
+def _write_log_row(ws, row, rec, alt=False):
+    bg = C_LGRAY if alt else C_WHITE
+    ws.row_dimensions[row].height = 15
+    vals = [
+        rec["date_completed"].strftime("%Y-%m-%d"),
+        rec["wo"],
+        rec["company"],
+        rec["part_no"],
+        rec["desc"],
+        rec["process"],
+        rec["due_date"].strftime("%m/%d") if isinstance(rec["due_date"], datetime) else "—",
+        rec["next_step"],
+        rec["delivery_date"].strftime("%m/%d/%Y") if rec["delivery_date"] else "—",
+    ]
+    for i, val in enumerate(vals, 1):
+        c = ws.cell(row, i, val)
+        c.fill      = _fill(bg); c.border = _border()
+        c.font      = _font(size=9, bold=(i in (2, 6, 8)))
+        c.alignment = _align(h="left" if i in (3, 4, 5, 8) else "center")
+
+
+def record_completions_to_log(wb, records):
+    """Prepend today's completions to the LOG sheet (newest entries at top).
+
+    Structure:
+      Row 1: title banner
+      Row 2: column headers (frozen)
+      Row 3+: date banners + completion rows, newest date at top
+    """
+    if not records:
+        return
+
+    today_str = datetime.now().strftime("%B %d, %Y")
+
+    if "LOG" not in wb.sheetnames:
+        ws = wb.create_sheet("LOG")
+        _init_log_sheet(ws)
+        insert_at    = 3   # first entry goes right after header rows
+        needs_banner = True
+    else:
+        ws = wb["LOG"]
+        if not ws.cell(2, 1).value:   # re-init if headers missing
+            _init_log_sheet(ws)
+
+        # Check if row 3 already has today's date banner (same-day re-run)
+        banner_val = str(ws.cell(3, 1).value or "").strip()
+        if banner_val == today_str or banner_val == f"  {today_str}":
+            # Append within today's section — find where it ends
+            r = 4
+            while r <= ws.max_row + 1:
+                try:
+                    rgb = ws.cell(r, 1).fill.fgColor.rgb or "00000000"
+                except Exception:
+                    rgb = "00000000"
+                # Next date banner uses C_STEEL_DK ("1F4E79") — stop here
+                if "1F4E79" in rgb:
+                    break
+                if ws.cell(r, 1).value is None and ws.cell(r, 2).value is None:
+                    break
+                r += 1
+            insert_at    = r
+            needs_banner = False
+        else:
+            insert_at    = 3   # prepend before existing entries
+            needs_banner = True
+
+    n_insert = len(records) + (1 if needs_banner else 0)
+    ws.insert_rows(insert_at, amount=n_insert)
+
+    r = insert_at
+    if needs_banner:
+        _write_log_date_banner(ws, r, today_str)
+        r += 1
+
+    for i, rec in enumerate(records):
+        _write_log_row(ws, r + i, rec, i % 2 == 0)
+
+    print(f"  LOG: {len(records)} completion(s) recorded — {today_str}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print(f"Opening  {FILE}")
@@ -609,6 +922,17 @@ if __name__ == "__main__":
     print("Checking MAIN column layout ...")
     ensure_ship_vendor_col(wb["MAIN"])
 
+    print("Syncing green completions from CALENDAR ...")
+    completions = sync_green_completions(wb)
+
+    if completions:
+        print("Advancing CURRENT_STEP in MAIN ...")
+        records = apply_completions(wb["MAIN"], completions)
+        print("Recording to LOG ...")
+        record_completions_to_log(wb, records)
+    else:
+        print("  No green completions found — MAIN unchanged")
+
     print("Parsing MAIN ...")
     entries, row_to_img = parse_main(wb["MAIN"])
     print(f"  {len(entries)} process-due entries  |  {len(row_to_img)} screenshots")
@@ -619,7 +943,8 @@ if __name__ == "__main__":
     print("Building TODAY (Kanban) ...")
     build_today(wb, entries, row_to_img)
 
-    for name in ["TODAY","CALENDAR","MAIN"]:
+    # Sheet tab order: MAIN | CALENDAR | TODAY | LOG
+    for name in ["LOG","TODAY","CALENDAR","MAIN"]:
         if name in wb.sheetnames:
             wb.move_sheet(name, offset=-len(wb.sheetnames))
 

@@ -630,22 +630,33 @@ def build_today(wb, entries, row_to_img):
 # ── Green-completion sync ─────────────────────────────────────────────────────
 
 def _is_user_green(cell):
-    """Return True if the cell has a user-applied green fill (any shade).
+    """Detect any shade of green fill applied by the user.
 
-    Detection rule: G > B by 30+, G > R, and the colour is not a pale pastel
-    (avg brightness < 200).  This correctly catches olive/army greens like
-    Excel's 'Olive Green, Accent 3' (8FAF46 / 9BBB59) while ignoring our own
-    pastel template fills (D9F99D, A7F3D0, BBF7D0, etc.) which all have
-    average brightness > 200.
+    Handles:
+    - Theme fills: index 6 = 'Olive Green, Accent 3' in the default Office theme.
+      Excel saves theme-color picks without an explicit RGB value; openpyxl
+      returns type='theme' with theme=6 for these cells.
+    - Explicit RGB fills: G-B>30 AND G>R AND avg_brightness<200.
+      Catches olive/army greens like 8FAF46/9BBB59 while ignoring our own
+      pastel template fills which all have average brightness > 200.
     """
     try:
         fill = cell.fill
         if not fill or fill.fill_type != "solid":
             return False
-        rgb = fill.fgColor.rgb or ""
-        if len(rgb) == 8:           # ARGB  e.g. "FF9BBB59"
+        fg = fill.fgColor
+
+        # ── Theme color (Olive Green Accent 3 = index 6 in default theme) ─
+        if fg.type == "theme":
+            return int(fg.theme) == 6
+
+        # ── Explicit RGB ──────────────────────────────────────────────────
+        rgb = str(fg.rgb or "")
+        if not rgb or rgb in ("00000000", "FF000000", "FFFFFFFF"):
+            return False
+        if len(rgb) == 8:   # ARGB  e.g. "FF9BBB59" or "009BBB59"
             r = int(rgb[2:4], 16); g = int(rgb[4:6], 16); b = int(rgb[6:8], 16)
-        elif len(rgb) == 6:         # RGB   e.g. "9BBB59"
+        elif len(rgb) == 6: # RGB   e.g. "9BBB59"
             r = int(rgb[0:2], 16); g = int(rgb[2:4], 16); b = int(rgb[4:6], 16)
         else:
             return False

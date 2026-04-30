@@ -7,17 +7,17 @@ Tracks work orders from order entry through shipping across all shop floor stati
 
 ## What This Is
 
-A Python-driven Excel workbook (`CMF WIP - Schedule.xlsx`) with three tabs that automatically refresh from a single source of truth.
+A Python-driven Excel workbook (`CMF WIP - Schedule.xlsx`) with refreshed production and purchasing tabs driven from a single source of truth.
 
 ```
-MAIN  →  CALENDAR  →  TODAY (TV Display)
+MAIN  →  CALENDAR  →  PURCHASING
 ```
 
 | Tab | Who Uses It | Purpose |
 |-----|-------------|---------|
 | **MAIN** | Engineer / Boss | Enter orders, fill routing dates, update current step |
 | **CALENDAR** | Production Manager | See what's due when — plan the week |
-| **TODAY** | Shop Floor (TV) | Kanban board showing today's + overdue work by station |
+| **PURCHASING** | Purchasing | Flat queue of all active outside/vendor work |
 
 ---
 
@@ -39,7 +39,7 @@ Double-click **`Refresh Schedule.bat`**
 
 | File | Purpose | Run When |
 |------|---------|---------|
-| `cmf_schedule_builder.py` | Rebuilds CALENDAR + TODAY from MAIN | Daily |
+| `cmf_schedule_builder.py` | Rebuilds CALENDAR + PURCHASING from MAIN | Daily |
 | `cmf_migrate_main.py` | One-time migration from old WIP format | Once (already done) |
 | `cmf_merge.py` | Merges boss's WIP updates + engineer's routing | When boss sends new WIP |
 | `Refresh Schedule.bat` | Windows double-click runner | Daily (Windows) |
@@ -50,14 +50,14 @@ Double-click **`Refresh Schedule.bat`**
 ## Daily Workflow
 
 ```
-1. Engineer opens MAIN → fills in process due dates (blue columns L–AI)
+1. Engineer opens MAIN → fills in process due dates (blue columns L–AJ)
    and updates CURRENT STEP dropdown as parts move through the shop
 
 2. Run: Refresh Schedule.bat  (Windows)
         python3 cmf_schedule_builder.py  (Mac)
 
-3. CALENDAR refreshes → PM plans the day
-   TODAY refreshes    → display on factory TV
+3. CALENDAR refreshes   → PM plans the day with exact process names
+   PURCHASING refreshes → buyer sees all outside/vendor work
 ```
 
 ---

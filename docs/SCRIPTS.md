@@ -3,32 +3,33 @@
 ---
 
 ## cmf_schedule_builder.py
-**Run daily. Reads MAIN → rebuilds CALENDAR + TODAY.**
+**Run daily. Reads MAIN → rebuilds CALENDAR + PURCHASING.**
 
 ### Key functions
 
 | Function | What it does |
 |----------|-------------|
 | `parse_main(ws)` | Reads all part rows from MAIN, builds process-due entries + image map. Filters completed steps using date comparison. Computes `processes_left` sorted by actual due date. |
-| `build_calendar(wb, entries, row_to_img)` | Generates CALENDAR tab. 4-week rolling date-bucket. Always-visible overdue section. |
-| `build_today(wb, entries, row_to_img)` | Generates TODAY kanban. Active stations as column groups. TwoCellAnchor images. |
+| `build_calendar(wb, entries, row_to_img)` | Generates CALENDAR tab. 4-week rolling date-bucket with exact process names shown inside grouped stations. |
+| `build_purchasing(wb, entries, row_to_img)` | Generates PURCHASING tab. Flat list of all active outside/vendor steps with photos. |
 | `protect_workbook_images(wb)` | Wraps all loaded image BytesIO refs in `_UnclosableBytesIO` before any processing. |
+| `normalize_image_anchors(wb)` | Forces existing images to save as move-and-size-with-cells so Excel sorting keeps screenshots on the correct rows. |
 | `copy_image(src, ws, col, row)` | Copies image using TwoCellAnchor so it hides with filtered rows. |
 
 ### Constants to know
 
 ```python
-COL_CURRENT_STEP = 36   # col AJ — where part is now
-COL_STATUS       = 37   # col AK — COMPLETE / ON HOLD / etc.
+COL_CURRENT_STEP = 37   # col AK — where part is now
+COL_STATUS       = 38   # col AL — COMPLETE / ON HOLD / etc.
 BLUE_FIRST       = 12   # col L  — first process due date col
-BLUE_LAST        = 35   # col AI — DELIVERY DATE
+BLUE_LAST        = 36   # col AJ — DELIVERY DATE
 
 STEP_TO_COL = { "LASER CUT": 14, "WELD": 25, ... }  # used for date-based filtering
 COL_TO_PROCESS = { 14: "LASER CUT", 25: "WELD", ... } # used for PROCESSES LEFT
 ```
 
 ### STATIONS list
-Controls which columns feed into which station display in CALENDAR and TODAY.
+Controls which columns feed into which station display in CALENDAR and PURCHASING.
 Each entry: `(key, display_name, header_hex, row_hex, [col_indices])`
 
 ---

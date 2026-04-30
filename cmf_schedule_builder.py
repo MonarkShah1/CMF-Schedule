@@ -1,25 +1,30 @@
 #!/usr/bin/env python3
 """
 cmf_schedule_builder.py  —  Run daily (or any time)
-Refreshes CALENDAR and TODAY (Kanban TV display) from MAIN.
+Refreshes CALENDAR and PURCHASING from MAIN.
 
-Flow:  MAIN → CALENDAR (4-week date-bucket) → TODAY (Kanban by station)
+Flow:  MAIN → CALENDAR (production) + PURCHASING (outside/vendor work)
 
 Usage: python3 cmf_schedule_builder.py
 """
 
 import os, io
+from collections import OrderedDict
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.units import pixels_to_EMU
+from openpyxl.formatting.rule import FormulaRule
+from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.drawing.image import Image as XLImage
+from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor
 from datetime import datetime, timedelta
 from collections import defaultdict
 
 FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'CMF WIP - Schedule.xlsx')
 
 # ── Palette ───────────────────────────────────────────────────────────────────
-C_NAVY     = "1F3864";  C_WHITE    = "FFFFFF"
+C_NAVY     = "1F3864";  C_WHITE    = "FFFFFF"; C_GOLD = "FFD966"
 C_STEEL_DK = "1F4E79";  C_LGRAY    = "F2F2F2"
 C_DGRAY    = "404040";  C_YELLOW   = "FFF2CC"
 C_RED_LT   = "FFD7D7";  C_GREEN_LT = "E2EFDA"
@@ -41,6 +46,9 @@ COL_CURRENT_STEP = 37   # AK  (shifted after SHIP TO VENDOR col inserted at AI/3
 COL_STATUS       = 38   # AL
 HDR_ROW          = 2
 DATA_START       = 3
+MAIN_LAST_COL    = 39  # AM
+BLUE_FIRST       = 12  # L
+BLUE_LAST        = 36  # AJ
 
 # Maps CURRENT STEP value → its process column index.
 # Any process col < curr_col is considered done and hidden from calendar/today.
@@ -71,6 +79,14 @@ STEP_TO_COL = {
     "COMPLETE": 99,      "DONE": 99,  "SHIPPED": 99,
 }
 
+STEP_LIST = (
+    "MATERIALS,ENGINEERING,LASER CUT,LASER CUT (O),TUBE LASER (O),"
+    "SAW,BANDSAW (O),BEND,CLEAN,CSK,DRILL,TAPPING,GRIND,WELD,"
+    "MACHINE (O),PLATING (O),PAINT,PAINT (O),"
+    "SPECIAL,SPECIAL (O),WHOLE JOB (O),HARDWARE,ASSEMBLY,SHIP TO VENDOR,SHIP,RECEIVING,"
+    "COMPLETE,ON HOLD"
+)
+
 # Maps process column → canonical CURRENT STEP name used in the dropdown.
 # Used by apply_completions() to write the correct step name after advancing.
 _COL_TO_DROPDOWN_STEP = {
@@ -90,42 +106,99 @@ _COL_TO_DROPDOWN_STEP = {
 
 IMG_W = 85   # copy same size from migration
 IMG_H = 48
+IMG_PAD_X = 2
+IMG_PAD_Y = 2
+PART_ROW_H = 52
+HEADER_ROW_H = 24
+MAIN_COLS = [
+    ("A",  "WO #",              8, False),
+    ("B",  "PO #",             17, False),
+    ("C",  "COMPANY",          20, False),
+    ("D",  "JOB NAME",         28, False),
+    ("E",  "CUST SHIP",        12, False),
+    ("F",  "PART #",           16, False),
+    ("G",  "DESCRIPTION",      26, False),
+    ("H",  "QTY",               7, False),
+    ("I",  "SCREENSHOT",       13, False),
+    ("J",  "MATERIAL",         10, False),
+    ("K",  "THICKNESS",         9, False),
+    ("L",  "MATL",              6, True),
+    ("M",  "ENG",               6, True),
+    ("N",  "LASER",             6, True),
+    ("O",  "LASER\n(O)",        6, True),
+    ("P",  "TUBE\nLSR(O)",      6, True),
+    ("Q",  "SAW",               6, True),
+    ("R",  "BAND\n(O)",         6, True),
+    ("S",  "BEND",              6, True),
+    ("T",  "CLEAN",             6, True),
+    ("U",  "CSK",               6, True),
+    ("V",  "DRILL",             6, True),
+    ("W",  "TAP",               6, True),
+    ("X",  "GRIND",             6, True),
+    ("Y",  "WELD",              6, True),
+    ("Z",  "MACH\n(O)",         6, True),
+    ("AA", "PLAT\n(O)",         6, True),
+    ("AB", "PAINT",             6, True),
+    ("AC", "PAINT\n(O)",        6, True),
+    ("AD", "SPEC",              6, True),
+    ("AE", "SPEC\n(O)",         6, True),
+    ("AF", "W.JOB\n(O)",        6, True),
+    ("AG", "HW",                6, True),
+    ("AH", "ASSM",              6, True),
+    ("AI", "SHIP TO\nVENDOR",   8, True),
+    ("AJ", "DELIVERY\nDATE",    8, True),
+    ("AK", "CURRENT\nSTEP",    18, False),
+    ("AL", "STATUS",           12, False),
+    ("AM", "NOTES",            35, False),
+]
 
 # Station definitions: (key, display_name, hdr_hex, row_hex, [main_col_indices_1based])
-# Each station maps to one or more process-due-date columns.
-# ORDER: in-house processes first, then outside (vendor) processes.
-# In-house and outside variants of the same process type are separate stations
-# so they never share a calendar column.
+# Each horizontal section maps to exactly one process column so the calendar can
+# show a separate block for each individual step.
 STATIONS = [
     # ── IN-HOUSE ──────────────────────────────────────────────────────────────
     # key            display name               hdr       row        cols
-    ("MATERIALS",   "MATERIALS",            "1D4ED8","BAE6FD", [12]),        # L   Sky Blue
-    ("ENGINEERING", "ENGINEERING",          "3730A3","C7D2FE", [13]),        # M   Indigo
-    ("LASER_IN",    "LASER CUTTING",        "C2410C","FED7AA", [14]),        # N   Orange
-    ("SAW_IN",      "SAW",                  "92400E","FDE68A", [17]),        # Q   Amber
-    ("FORMING",     "FORMING / BENDING",    "A16207","FEF08A", [19]),        # S   Yellow
-    ("CLEAN",       "CLEANING",             "065F46","A7F3D0", [20]),        # T   Mint Green
-    ("ACCESSORIES", "CSK / DRILL / TAPPING","6B21A8","E9D5FF", [21,22,23]), # UVW Purple
-    ("GRIND",       "GRINDING",             "334155","CBD5E1", [24]),        # X   Slate
-    ("WELDING",     "WELDING",              "B91C1C","FECACA", [25]),        # Y   Red
-    ("SPECIAL_IN",  "SPECIAL",              "374151","D1D5DB", [30]),        # AD  Gray
-    ("HARDWARE",    "HARDWARE",             "0E7490","A5F3FC", [33]),        # AG  Cyan
-    ("ASSEMBLY",    "ASSEMBLY",             "166534","D9F99D", [34]),        # AH  Lime
-    ("SHIP_VENDOR", "SHIP TO VENDOR",       "0F766E","99F6E4", [35]),        # AI  Teal
+    ("MATERIALS",     "MATERIALS",        "1D4ED8","BAE6FD", [12]),
+    ("ENGINEERING",   "ENGINEERING",      "3730A3","C7D2FE", [13]),
+    ("LASER_CUT",     "LASER CUT",        "C2410C","FED7AA", [14]),
+    ("SAW",           "SAW",              "92400E","FDE68A", [17]),
+    ("BEND",          "BEND",             "A16207","FEF08A", [19]),
+    ("CLEAN",         "CLEAN",            "065F46","A7F3D0", [20]),
+    ("CSK",           "CSK",              "6B21A8","E9D5FF", [21]),
+    ("DRILL",         "DRILL",            "7C3AED","E9D5FF", [22]),
+    ("TAPPING",       "TAPPING",          "8B5CF6","E9D5FF", [23]),
+    ("GRIND",         "GRIND",            "334155","CBD5E1", [24]),
+    ("WELD",          "WELD",             "B91C1C","FECACA", [25]),
+    ("SPECIAL",       "SPECIAL",          "374151","D1D5DB", [30]),
+    ("HARDWARE",      "HARDWARE",         "0E7490","A5F3FC", [33]),
+    ("ASSEMBLY",      "ASSEMBLY",         "166534","D9F99D", [34]),
+    ("SHIP_VENDOR",   "SHIP TO VENDOR",   "0F766E","99F6E4", [35]),
     # ── OUTSIDE (VENDOR) ──────────────────────────────────────────────────────
-    ("LASER_OUT",   "LASER CUT / TUBE (OUTSIDE)","EA580C","FFEDD5", [15,16]),# OP  Orange-lite
-    ("SAW_OUT",     "BANDSAW (OUTSIDE)",    "B45309","FEF3C7", [18]),        # R   Amber-lite
-    ("OUTSIDE",     "OUTSIDE MACHINE",      "5B21B6","DDD6FE", [26]),       # Z   Violet
-    ("PAINT",       "PAINT / POWDER COAT / PLATE","15803D","BBF7D0",[27,28,29]),# AAABAC Green
-    ("SPECIAL_OUT", "SPECIAL / WHOLE JOB (OUTSIDE)","4B5563","E5E7EB",[31,32]),# AEAF Gray-lite
+    ("LASER_CUT_O",   "LASER CUT (O)",    "EA580C","FFEDD5", [15]),
+    ("TUBE_LASER_O",  "TUBE LASER (O)",   "F97316","FFEDD5", [16]),
+    ("BANDSAW_O",     "BANDSAW (O)",      "B45309","FEF3C7", [18]),
+    ("MACHINE_O",     "MACHINE (O)",      "5B21B6","DDD6FE", [26]),
+    ("PLATING_O",     "PLATING (O)",      "15803D","BBF7D0", [27]),
+    ("PAINT",         "PAINT",            "16A34A","BBF7D0", [28]),
+    ("PAINT_O",       "PAINT (O)",        "22C55E","DCFCE7", [29]),
+    ("SPECIAL_O",     "SPECIAL (O)",      "4B5563","E5E7EB", [31]),
+    ("WHOLE_JOB_O",   "WHOLE JOB (O)",    "6B7280","E5E7EB", [32]),
     # ── REFERENCE — not rendered as a calendar station ────────────────────────
-    ("SHIPPING",    "DELIVERY DATE",        "1F3864","E2EFDA", [36]),        # AJ  Navy
+    ("SHIPPING",      "DELIVERY DATE",     "1F3864","E2EFDA", [36]),
 ]
 
 STATION_KEYS  = [s[0] for s in STATIONS]
 STATION_NAME  = {s[0]: s[1] for s in STATIONS}
 STATION_HDR_C = {s[0]: s[2] for s in STATIONS}
 STATION_ROW_C = {s[0]: s[3] for s in STATIONS}
+PURCHASING_STATION_KEYS = {
+    "SHIP_VENDOR", "LASER_CUT_O", "TUBE_LASER_O", "BANDSAW_O",
+    "MACHINE_O", "PLATING_O", "PAINT_O", "SPECIAL_O", "WHOLE_JOB_O",
+}
+CALENDAR_STATION_KEYS = {
+    s[0] for s in STATIONS
+    if s[0] not in PURCHASING_STATION_KEYS and s[0] != "SHIPPING"
+}
 
 
 # ── Image helpers ─────────────────────────────────────────────────────────────
@@ -149,22 +222,55 @@ def protect_workbook_images(wb):
             _protect_image(img)
 
 
+def _set_two_cell_anchor(img, col_1idx, row_1idx, width_px, height_px, pad_x=IMG_PAD_X, pad_y=IMG_PAD_Y):
+    from openpyxl.drawing.spreadsheet_drawing import AnchorMarker
+    c0, r0 = col_1idx - 1, row_1idx - 1
+    anchor = TwoCellAnchor(editAs='twoCell')
+    anchor._from = AnchorMarker(
+        col=c0,
+        colOff=pixels_to_EMU(pad_x),
+        row=r0,
+        rowOff=pixels_to_EMU(pad_y),
+    )
+    anchor.to = AnchorMarker(
+        col=c0,
+        colOff=pixels_to_EMU(pad_x + width_px),
+        row=r0,
+        rowOff=pixels_to_EMU(pad_y + height_px),
+    )
+    img.anchor = anchor
+
+
+def normalize_image_anchors(wb):
+    """Force all existing images to stay inside their cell and sort with rows."""
+    normalized = 0
+    for ws in wb.worksheets:
+        for img in ws._images:
+            anchor = getattr(img, "anchor", None)
+            if not isinstance(anchor, TwoCellAnchor):
+                continue
+            row_1idx = anchor._from.row + 1
+            col_1idx = anchor._from.col + 1
+            if ws.title == "MAIN":
+                _set_two_cell_anchor(img, col_1idx, row_1idx, IMG_W, IMG_H)
+                normalized += 1
+            elif anchor.editAs != "twoCell":
+                anchor.editAs = "twoCell"
+                normalized += 1
+    if normalized:
+        print(f"  IMAGE-ANCHOR: normalized {normalized} image(s) for Excel sorting")
+
+
 def copy_image(raw_bytes, dest_ws, col_1idx, row_1idx):
     """
     Place a copy of raw_bytes as an image in dest_ws at (col_1idx, row_1idx).
     Accepts raw bytes (as stored in row_to_img) — never touches MAIN images.
     Uses TwoCellAnchor so image moves with its row.
     """
-    from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor, AnchorMarker
     try:
         buf = _UnclosableBytesIO(raw_bytes)
         img = XLImage(buf)
-        c0, r0 = col_1idx - 1, row_1idx - 1
-        anchor        = TwoCellAnchor()
-        anchor.editAs = 'twoCell'
-        anchor._from  = AnchorMarker(col=c0,   colOff=0, row=r0,   rowOff=0)
-        anchor.to     = AnchorMarker(col=c0+1, colOff=0, row=r0+1, rowOff=0)
-        img.anchor    = anchor
+        _set_two_cell_anchor(img, col_1idx, row_1idx, CAL_IMG_W, CAL_IMG_H)
         dest_ws.add_image(img)
         return True
     except Exception:
@@ -199,6 +305,277 @@ def ensure_ship_vendor_col(ws):
     )
     ws.column_dimensions[get_column_letter(35)].width = 6
     print("  AUTO-MIGRATION: done — no further action needed.")
+
+
+def _is_blank(val):
+    return val is None or (isinstance(val, str) and val.strip() == "")
+
+
+def _main_row_kind(ws, row):
+    wo = ws.cell(row, COL_WO).value
+    part_area_has_data = any(not _is_blank(ws.cell(row, c).value) for c in range(6, MAIN_LAST_COL + 1))
+    meta_area_has_data = any(not _is_blank(ws.cell(row, c).value) for c in range(1, 6))
+    if not part_area_has_data and meta_area_has_data and not _is_blank(wo):
+        return "header"
+    if part_area_has_data:
+        return "part"
+    return "blank"
+
+
+def repair_main_sheet(ws, title_text="CMF  WORK IN PROGRESS"):
+    """Restore MAIN sheet layout/styles so admins can edit without preserving format manually."""
+    title_range = f"A1:{MAIN_COLS[-1][0]}1"
+    if str(title_range) not in {str(r) for r in ws.merged_cells.ranges}:
+        ws.merge_cells(title_range)
+
+    ws.row_dimensions[1].height = 30
+    title = ws["A1"]
+    title.value = f"{title_text}   —   Updated {datetime.now().strftime('%B %d, %Y')}"
+    title.font = _font(bold=True, color=C_WHITE, size=14)
+    title.fill = _fill(C_NAVY)
+    title.alignment = _align()
+
+    ws.row_dimensions[HDR_ROW].height = 42
+    for idx, (letter, label, width, is_blue) in enumerate(MAIN_COLS, 1):
+        ws.column_dimensions[letter].width = width
+        c = ws.cell(HDR_ROW, idx, label)
+        c.border = _border()
+        c.alignment = _align(wrap=True)
+        if is_blue:
+            c.font = _font(bold=True, size=8, color=C_STEEL_DK)
+            c.fill = _fill("DEEAF1")
+        else:
+            c.font = _font(bold=True, size=8, color=C_WHITE)
+            c.fill = _fill(C_NAVY)
+
+    current_header = {"wo": None, "po": None, "company": None}
+    part_alt = False
+    autofilled = 0
+    styled_parts = 0
+    styled_headers = 0
+
+    for row in range(DATA_START, ws.max_row + 1):
+        kind = _main_row_kind(ws, row)
+
+        if kind == "header":
+            current_header = {
+                "wo": ws.cell(row, 1).value,
+                "po": ws.cell(row, 2).value,
+                "company": ws.cell(row, 3).value,
+            }
+            styled_headers += 1
+            ws.row_dimensions[row].height = HEADER_ROW_H
+            for col in range(1, MAIN_LAST_COL + 1):
+                c = ws.cell(row, col)
+                c.fill = _fill(C_NAVY)
+                c.border = _border("2E4D7B")
+                c.alignment = _align(h="left")
+                c.font = _font(bold=True, color=(C_GOLD if col == 1 else C_WHITE), size=11)
+                if col == 5 and not _is_blank(c.value):
+                    c.number_format = "m/d/yy"
+            continue
+
+        if kind != "part":
+            continue
+
+        if current_header["wo"] is not None:
+            if _is_blank(ws.cell(row, 1).value):
+                ws.cell(row, 1).value = current_header["wo"]; autofilled += 1
+            if _is_blank(ws.cell(row, 2).value):
+                ws.cell(row, 2).value = current_header["po"]; autofilled += 1
+            if _is_blank(ws.cell(row, 3).value):
+                ws.cell(row, 3).value = current_header["company"]; autofilled += 1
+
+        part_alt = not part_alt
+        styled_parts += 1
+        bg = C_LGRAY if part_alt else C_WHITE
+        ws.row_dimensions[row].height = PART_ROW_H
+
+        for col in range(1, MAIN_LAST_COL + 1):
+            c = ws.cell(row, col)
+            is_blue = BLUE_FIRST <= col <= BLUE_LAST
+            c.border = _border()
+            c.alignment = _align(h="left" if col in (3, 6, 7, 39) else "center")
+            c.font = _font(bold=(col in (1, 2, 3)), size=10)
+            c.fill = _fill("DEEAF1" if is_blue and _is_blank(c.value) else (C_WHITE if is_blue else bg))
+
+            if col in range(BLUE_FIRST, BLUE_LAST + 1) or col == 5:
+                c.number_format = "m/d/yy"
+
+    ws.freeze_panes = "A3"
+    ws.auto_filter.ref = f"A{HDR_ROW}:{MAIN_COLS[-1][0]}{ws.max_row}"
+
+    ws.conditional_formatting._cf_rules.clear()
+    if ws.max_row >= DATA_START:
+        first_col = get_column_letter(BLUE_FIRST)
+        last_col = get_column_letter(BLUE_LAST)
+        rng = f"{first_col}{DATA_START}:{last_col}{ws.max_row}"
+        ws.conditional_formatting.add(rng, FormulaRule(
+            formula=[f"AND({first_col}{DATA_START}<>\"\",ISNUMBER({first_col}{DATA_START}),{first_col}{DATA_START}<TODAY())"],
+            fill=_fill(C_RED_LT), font=Font(color="CC0000", bold=True),
+        ))
+        ws.conditional_formatting.add(rng, FormulaRule(
+            formula=[f"AND({first_col}{DATA_START}<>\"\",ISNUMBER({first_col}{DATA_START}),{first_col}{DATA_START}>=TODAY(),{first_col}{DATA_START}<TODAY()+4)"],
+            fill=_fill(C_YELLOW), font=Font(color="806000", bold=True),
+        ))
+
+    ws.data_validations.dataValidation = []
+    if ws.max_row >= DATA_START:
+        dv = DataValidation(type="list", formula1=f'"{STEP_LIST}"', allow_blank=True, showErrorMessage=False)
+        dv.sqref = f"AK{DATA_START}:AK{ws.max_row}"
+        ws.add_data_validation(dv)
+
+    print(f"  MAIN-REPAIR: styled {styled_headers} header row(s), {styled_parts} part row(s), autofilled {autofilled} key cell(s)")
+
+
+def extract_row_images(ws):
+    row_to_img = {}
+    for img in ws._images:
+        try:
+            excel_row = img.anchor._from.row + 1
+            ref = img.ref
+            if hasattr(ref, 'read'):
+                ref.seek(0)
+                raw = ref.read()
+                ref.seek(0)
+            else:
+                raw = img._data()
+            if raw:
+                row_to_img[excel_row] = raw
+        except Exception:
+            pass
+    return row_to_img
+
+
+def extract_wip_groups(ws):
+    row_to_img = extract_row_images(ws)
+    groups = OrderedDict()
+    current_header = {"wo": None, "po": None, "company": None, "job_name": None, "cust_ship": None}
+
+    for row in range(DATA_START, ws.max_row + 1):
+        kind = _main_row_kind(ws, row)
+        if kind == "blank":
+            continue
+
+        vals = [ws.cell(row, c).value for c in range(1, MAIN_LAST_COL + 1)]
+
+        if kind == "header":
+            current_header = {
+                "wo": vals[0],
+                "po": vals[1],
+                "company": vals[2],
+                "job_name": vals[3],
+                "cust_ship": vals[4],
+            }
+            wo_key = str(vals[0]).strip() if vals[0] is not None else None
+            if wo_key and wo_key not in groups:
+                groups[wo_key] = {"header": current_header.copy(), "parts": []}
+            elif wo_key:
+                groups[wo_key]["header"].update({k: v for k, v in current_header.items() if not _is_blank(v)})
+            continue
+
+        wo = vals[0] if not _is_blank(vals[0]) else current_header["wo"]
+        if _is_blank(wo):
+            continue
+        wo_key = str(wo).strip()
+        if wo_key not in groups:
+            groups[wo_key] = {
+                "header": {
+                    "wo": wo,
+                    "po": vals[1] if not _is_blank(vals[1]) else current_header["po"],
+                    "company": vals[2] if not _is_blank(vals[2]) else current_header["company"],
+                    "job_name": current_header["job_name"],
+                    "cust_ship": current_header["cust_ship"],
+                },
+                "parts": [],
+            }
+
+        header = groups[wo_key]["header"]
+        for field, idx in [("po", 1), ("company", 2)]:
+            if _is_blank(header[field]) and not _is_blank(vals[idx]):
+                header[field] = vals[idx]
+        if _is_blank(header["job_name"]) and not _is_blank(current_header["job_name"]):
+            header["job_name"] = current_header["job_name"]
+        if _is_blank(header["cust_ship"]) and not _is_blank(current_header["cust_ship"]):
+            header["cust_ship"] = current_header["cust_ship"]
+
+        groups[wo_key]["parts"].append({
+            "values": vals,
+            "image": row_to_img.get(row),
+        })
+
+    return groups
+
+
+def part_is_ready_for_main(part):
+    values = part["values"]
+    current_raw = str(values[COL_CURRENT_STEP - 1] or "").strip().upper()
+    has_process_dates = any(isinstance(values[c - 1], datetime) for c in range(BLUE_FIRST, 36))
+    return bool(current_raw) and has_process_dates
+
+
+def repartition_main_and_admin(main_groups, admin_groups):
+    new_main = OrderedDict()
+    new_admin = OrderedDict()
+
+    def push(target, wo_key, header, part):
+        if wo_key not in target:
+            target[wo_key] = {"header": header.copy(), "parts": []}
+        target[wo_key]["parts"].append(part)
+
+    for source in (main_groups, admin_groups):
+        for wo_key, group in source.items():
+            header = group["header"]
+            for part in group["parts"]:
+                target = new_main if part_is_ready_for_main(part) else new_admin
+                push(target, wo_key, header, part)
+
+    return new_main, new_admin
+
+
+def rebuild_wip_sheet(wb, sheet_name, title_text, groups, index):
+    if sheet_name in wb.sheetnames:
+        del wb[sheet_name]
+    ws = wb.create_sheet(sheet_name, index)
+
+    out_row = DATA_START
+    for _, group in groups.items():
+        if not group["parts"]:
+            continue
+        header = group["header"]
+        ws.cell(out_row, 1, header["wo"])
+        ws.cell(out_row, 2, header["po"])
+        ws.cell(out_row, 3, header["company"])
+        ws.cell(out_row, 4, header["job_name"])
+        ws.cell(out_row, 5, header["cust_ship"])
+        out_row += 1
+
+        for part in group["parts"]:
+            vals = list(part["values"])
+            if _is_blank(vals[0]): vals[0] = header["wo"]
+            if _is_blank(vals[1]): vals[1] = header["po"]
+            if _is_blank(vals[2]): vals[2] = header["company"]
+            for col_idx, val in enumerate(vals, 1):
+                ws.cell(out_row, col_idx, val)
+            if part.get("image"):
+                copy_image(part["image"], ws, COL_SCREENSHOT, out_row)
+            out_row += 1
+
+    repair_main_sheet(ws, title_text=title_text)
+    return ws
+
+
+def sync_admin_input_flow(wb):
+    main_groups = extract_wip_groups(wb["MAIN"])
+    admin_groups = extract_wip_groups(wb["ADMIN INPUT"]) if "ADMIN INPUT" in wb.sheetnames else OrderedDict()
+    new_main, new_admin = repartition_main_and_admin(main_groups, admin_groups)
+
+    rebuild_wip_sheet(wb, "MAIN", "CMF  WORK IN PROGRESS", new_main, 0)
+    rebuild_wip_sheet(wb, "ADMIN INPUT", "CMF  ADMIN INPUT  —  New Orders / Routing Review", new_admin, 1)
+
+    main_parts = sum(len(g["parts"]) for g in new_main.values())
+    admin_parts = sum(len(g["parts"]) for g in new_admin.values())
+    print(f"  ADMIN-FLOW: MAIN has {main_parts} routed part(s) | ADMIN INPUT has {admin_parts} pending part(s)")
 
 
 # ── Parse MAIN ────────────────────────────────────────────────────────────────
@@ -284,9 +661,7 @@ def parse_main(ws):
                         and curr_step_col and col_idx < curr_step_col):
                     continue    # already done: same date, earlier process column
 
-                # Step status label — 2 states only:
-                #   ▶ READY  = operator can work on this right now
-                #   ⏳ <step> = still waiting; shows what's blocking
+                process_name = _COL_TO_DROPDOWN_STEP.get(col_idx, COL_TO_PROCESS.get(col_idx, s_name))
                 if curr_step_date is None:
                     step_status = ""               # not started — no label
                 elif due == curr_step_date:
@@ -308,6 +683,7 @@ def parse_main(ws):
                     current_step  = curr_raw or "—",
                     processes_left= processes_left,
                     delivery_date = delivery_date,
+                    process_name  = process_name,
                     step_status   = step_status,
                 ))
 
@@ -337,18 +713,21 @@ CAL_IMG_H  = 44              # photo height in pixels
 CAL_STATION_COLOR = {s[0]: s[3] for s in STATIONS}
 
 
-def build_calendar(wb, entries, row_to_img):
-    if "CALENDAR" in wb.sheetnames: del wb["CALENDAR"]
-    ws = wb.create_sheet("CALENDAR")
+def _build_horizontal_board(wb, sheet_name, title, entries, row_to_img, station_keys=None):
+    if sheet_name in wb.sheetnames:
+        del wb[sheet_name]
+    ws = wb.create_sheet(sheet_name)
     today = datetime.now().date()
 
     # Active stations in defined display order (skip SHIPPING — delivery date is a column)
     active = [s for s in STATIONS
-              if s[0] != "SHIPPING" and any(e["s_key"] == s[0] for e in entries)]
+              if s[0] != "SHIPPING"
+              and (station_keys is None or s[0] in station_keys)
+              and any(e["s_key"] == s[0] for e in entries)]
 
     if not active:
         ws["A1"] = "No scheduled work found."
-        print("  CALENDAR: no entries")
+        print(f"  {sheet_name}: no entries")
         return
 
     # Per-station items sorted by date (overdue first, then ascending)
@@ -375,7 +754,7 @@ def build_calendar(wb, entries, row_to_img):
     ws.row_dimensions[1].height = 30
     ws.merge_cells(f"A1:{last_col}1")
     c = ws["A1"]
-    c.value     = f"CMF  PRODUCTION CALENDAR   —   {today.strftime('%B %d, %Y')}"
+    c.value     = f"{title}   —   {today.strftime('%B %d, %Y')}"
     c.font      = _font(bold=True, color=C_WHITE, size=14)
     c.fill      = _fill(C_NAVY); c.alignment = _align()
 
@@ -496,135 +875,32 @@ def build_calendar(wb, entries, row_to_img):
             ws.cell(row, sc + CAL_SUB_N).fill = _fill("D0D0D0")
 
     ws.freeze_panes = "A5"
-    print(f"  CALENDAR: {len(entries)} entries across {len(active)} stations  ({overdue_count} overdue)")
+    visible_count = sum(len(items) for items in station_items.values())
+    print(f"  {sheet_name}: {visible_count} entries across {len(active)} stations  ({overdue_count} overdue)")
 
 
-# ── TODAY — Kanban board ──────────────────────────────────────────────────────
-# Each active station = a column group: WO | COMPANY | PART# | QTY | DUE | PHOTO
-BLOCK_W      = [8, 16, 14, 7, 10, 13]   # col widths per sub-column
-BLOCK_LABELS = ["WO #","COMPANY","PART #","QTY","DUE","PHOTO"]
-BLOCK_NC     = len(BLOCK_W)     # 6 sub-columns
-DIVIDER_W    = 2
-ITEM_H       = 90    # row height in points — tall for in-cell photo
-KANBAN_IMG_W = 90
-KANBAN_IMG_H = 70
+def build_calendar(wb, entries, row_to_img):
+    _build_horizontal_board(
+        wb,
+        "CALENDAR",
+        "CMF  PRODUCTION CALENDAR",
+        [e for e in entries if e["s_key"] in CALENDAR_STATION_KEYS],
+        row_to_img,
+        station_keys=CALENDAR_STATION_KEYS,
+    )
 
 
-def build_today(wb, entries, row_to_img):
-    if "TODAY" in wb.sheetnames: del wb["TODAY"]
-    ws = wb.create_sheet("TODAY")
-    today = datetime.now().date()
-
-    due_entries = [e for e in entries if e["date"].date() <= today]
-    if not due_entries:
-        ws.row_dimensions[1].height = 60
-        ws.merge_cells("A1:H1")
-        c = ws["A1"]
-        c.value     = f"  ✅  PRODUCTION SCHEDULE  —  {datetime.now().strftime('%A %B %d, %Y').upper()}  —  SHOP IS CLEAR"
-        c.font      = _font(bold=True, size=18, color="375623")
-        c.fill      = _fill("E2EFDA"); c.alignment = _align(h="left")
-        print("  TODAY: clear"); return
-
-    # Active stations in display order
-    active = [s for s in STATIONS if any(e["s_key"] == s[0] for e in due_entries)]
-
-    # Assign column starts
-    station_start = {}
-    col = 1
-    for s in active:
-        station_start[s[0]] = col
-        for offset, w in enumerate(BLOCK_W):
-            ws.column_dimensions[get_column_letter(col + offset)].width = w
-        ws.column_dimensions[get_column_letter(col + BLOCK_NC)].width = DIVIDER_W
-        col += BLOCK_NC + 1
-    total_cols = col - 1
-
-    station_items = {}
-    for s in active:
-        items = [e for e in due_entries if e["s_key"] == s[0]]
-        items.sort(key=lambda e: (0 if e["date"].date() < today else 1, e["date"]))
-        station_items[s[0]] = items
-
-    max_items = max(len(v) for v in station_items.values())
-
-    # ── Row 1: title ──────────────────────────────────────────────────────────
-    ws.row_dimensions[1].height = 50
-    ws.merge_cells(f"A1:{get_column_letter(total_cols)}1")
-    c = ws["A1"]
-    od = sum(1 for e in due_entries if e["date"].date() < today)
-    c.value     = (f"  CMF  PRODUCTION SCHEDULE   —   "
-                   f"{datetime.now().strftime('%A, %B %d, %Y').upper()}"
-                   f"   |   {od} OVERDUE  •  {len(due_entries)-od} DUE TODAY")
-    c.font      = _font(bold=True, color=C_WHITE, size=18)
-    c.fill      = _fill(C_NAVY); c.alignment = _align(h="left")
-
-    # ── Row 2: station headers ────────────────────────────────────────────────
-    ws.row_dimensions[2].height = 44
-    for s in active:
-        sc = station_start[s[0]]
-        ws.merge_cells(f"{get_column_letter(sc)}2:{get_column_letter(sc+BLOCK_NC-1)}2")
-        c = ws.cell(2, sc)
-        n  = len(station_items[s[0]])
-        od_n = sum(1 for e in station_items[s[0]] if e["date"].date() < today)
-        c.value     = (f"  {STATION_NAME[s[0]].upper()}  ({n})"
-                       + (f"  ⚠ {od_n} OVERDUE" if od_n else ""))
-        c.font      = _font(bold=True, color=C_WHITE, size=15)
-        c.fill      = _fill(STATION_HDR_C[s[0]]); c.alignment = _align(h="left")
-        ws.cell(2, sc+BLOCK_NC).fill = _fill("D0D0D0")
-
-    # ── Row 3: sub-headers ────────────────────────────────────────────────────
-    ws.row_dimensions[3].height = 18
-    for s in active:
-        sc = station_start[s[0]]
-        for offset, lbl in enumerate(BLOCK_LABELS):
-            c = ws.cell(3, sc+offset, lbl)
-            c.font = _font(bold=True, size=9, color=C_DGRAY)
-            c.fill = _fill(STATION_ROW_C[s[0]]); c.border = _border("AAAAAA")
-            c.alignment = _align()
-        ws.cell(3, sc+BLOCK_NC).fill = _fill("D0D0D0")
-
-    # ── Rows 4+: item cards ───────────────────────────────────────────────────
-    for idx in range(max_items):
-        row = 4 + idx
-        ws.row_dimensions[row].height = ITEM_H
-
-        for s in active:
-            sc    = station_start[s[0]]
-            items = station_items[s[0]]
-
-            if idx < len(items):
-                e     = items[idx]
-                is_od = e["date"].date() < today
-                bg    = "FCA5A5" if is_od else C_YELLOW
-                due_fg= "CC0000" if is_od else "806000"
-
-                vals = [e["wo"], e["company"],
-                        e["part_no"] or e["desc"], e["qty"],
-                        e["date"].strftime("%b %d").upper() if isinstance(e["date"], datetime) else "",
-                        None]
-                for offset, val in enumerate(vals):
-                    c = ws.cell(row, sc+offset, val)
-                    c.fill   = _fill(bg); c.border = _border("CCCCCC")
-                    c.alignment = _align(h="left" if offset in (1,2) else "center")
-                    if offset == 0:   c.font = _font(bold=True, size=13, color=C_DGRAY)
-                    elif offset == 1: c.font = _font(bold=True, size=12, color=C_DGRAY)
-                    elif offset == 4: c.font = _font(bold=True, size=12, color=due_fg)
-                    else:             c.font = _font(size=12, color=C_DGRAY)
-
-                # Photo — TwoCellAnchor so it filters/hides with the row
-                if e["main_row"] in row_to_img:
-                    copy_image(row_to_img[e["main_row"]], ws, sc + 5, row)
-            else:
-                bg = STATION_ROW_C[s[0]]
-                for offset in range(BLOCK_NC):
-                    c = ws.cell(row, sc+offset)
-                    c.fill = _fill(bg); c.border = _border("DDDDDD")
-
-            ws.cell(row, sc+BLOCK_NC).fill = _fill("D0D0D0")
-
-    ws.freeze_panes = "A4"
-    img_count = sum(1 for e in due_entries if e["main_row"] in row_to_img)
-    print(f"  TODAY: {len(due_entries)} items across {len(active)} stations ({img_count} with photos)")
+def build_purchasing(wb, entries, row_to_img):
+    if "TODAY" in wb.sheetnames:
+        del wb["TODAY"]
+    _build_horizontal_board(
+        wb,
+        "PURCHASING",
+        "CMF  PURCHASING / OUTSIDE WORK",
+        [e for e in entries if e["s_key"] in PURCHASING_STATION_KEYS],
+        row_to_img,
+        station_keys=PURCHASING_STATION_KEYS,
+    )
 
 
 # ── Green-completion sync ─────────────────────────────────────────────────────
@@ -932,6 +1208,8 @@ if __name__ == "__main__":
 
     print("Checking MAIN column layout ...")
     ensure_ship_vendor_col(wb["MAIN"])
+    if "ADMIN INPUT" in wb.sheetnames:
+        ensure_ship_vendor_col(wb["ADMIN INPUT"])
 
     print("Syncing green completions from CALENDAR ...")
     completions = sync_green_completions(wb)
@@ -944,6 +1222,9 @@ if __name__ == "__main__":
     else:
         print("  No green completions found — MAIN unchanged")
 
+    print("Syncing ADMIN INPUT flow ...")
+    sync_admin_input_flow(wb)
+
     print("Parsing MAIN ...")
     entries, row_to_img = parse_main(wb["MAIN"])
     print(f"  {len(entries)} process-due entries  |  {len(row_to_img)} screenshots")
@@ -951,17 +1232,23 @@ if __name__ == "__main__":
     print("Building CALENDAR ...")
     build_calendar(wb, entries, row_to_img)
 
-    print("Building TODAY (Kanban) ...")
-    build_today(wb, entries, row_to_img)
+    print("Building PURCHASING ...")
+    build_purchasing(wb, entries, row_to_img)
 
-    # Sheet tab order: MAIN | CALENDAR | TODAY | LOG
-    for name in ["LOG","TODAY","CALENDAR","MAIN"]:
-        if name in wb.sheetnames:
-            wb.move_sheet(name, offset=-len(wb.sheetnames))
+    print("Normalizing image anchors ...")
+    normalize_image_anchors(wb)
+
+    if "MERGE CHANGES" in wb.sheetnames:
+        del wb["MERGE CHANGES"]
+
+    desired_order = ["ADMIN INPUT", "MAIN", "CALENDAR", "PURCHASING", "LOG"]
+    ordered = [wb[name] for name in desired_order if name in wb.sheetnames]
+    remaining = [ws for ws in wb.worksheets if ws.title not in desired_order]
+    wb._sheets = ordered + remaining
 
     print(f"Saving   {FILE}")
     wb.save(FILE)
     print("Done ✓\n")
-    print("  MAIN     → engineer fills routing (blue cols L–AI) + screenshots (col I)")
-    print("  CALENDAR → PM planning view, 4-week rolling, photos inline")
-    print("  TODAY    → Kanban TV display, stations as columns, photos in cards")
+    print("  MAIN       → engineer fills routing (blue cols L–AJ) + screenshots (col I)")
+    print("  CALENDAR   → one horizontal section per production step")
+    print("  PURCHASING → same horizontal layout for outside/vendor steps")

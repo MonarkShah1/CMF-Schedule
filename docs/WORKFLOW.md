@@ -6,13 +6,13 @@
 
 1. Open `CMF WIP - Schedule.xlsx`
 2. Go to **MAIN** tab
-3. For each part, fill in the blue process columns (L–AI) with due dates
-4. Update **CURRENT STEP** (col AJ) dropdown as parts move through the shop
+3. For each part, fill in the blue process columns (L–AJ) with due dates
+4. Update **CURRENT STEP** (col AK) dropdown as parts move through the shop
 5. Paste screenshot into **col I** for visual reference
 6. Save and close Excel
 7. Double-click `Refresh Schedule.bat`
 
-CALENDAR and TODAY update automatically.
+CALENDAR and PURCHASING update automatically.
 
 ---
 
@@ -20,9 +20,9 @@ CALENDAR and TODAY update automatically.
 
 1. Open `CMF WIP - Schedule.xlsx` → go to **CALENDAR**
 2. Check the overdue section at the top first — these are blocked jobs
-3. Scan the week's date buckets — see which stations are busy
+3. Scan the week's date buckets — each row shows the exact process inside the grouped station
 4. Use **PROCESSES LEFT** column to understand the full remaining path for each part
-5. Go to **TODAY** tab to see the TV-ready kanban view
+5. Go to **PURCHASING** to review all active outside/vendor work
 
 ---
 
@@ -49,8 +49,8 @@ If needed without running the merge script:
 1. Go to **MAIN** tab
 2. Insert a **navy header row** — fill cols A (WO#), B (PO#), C (Company), D (Job Name), E (Cust Ship)
 3. Add one or more **grey part rows** below — fill cols F (Part#), G (Description), H (Qty)
-4. Fill in blue process columns (L–AI) for each part
-5. Set CURRENT STEP dropdown (col AJ)
+4. Fill in blue process columns (L–AJ) for each part
+5. Set CURRENT STEP dropdown (col AK)
 6. Run `Refresh Schedule.bat`
 
 ---
@@ -58,10 +58,10 @@ If needed without running the merge script:
 ## Marking a Job Complete
 
 1. Go to the part rows for that WO in **MAIN**
-2. Set **STATUS** (col AK) to `COMPLETE` for each part row
+2. Set **STATUS** (col AL) to `COMPLETE` for each part row
 3. Run `Refresh Schedule.bat`
 
-The part will disappear from CALENDAR and TODAY automatically.
+The part will disappear from CALENDAR and PURCHASING automatically.
 
 ---
 
@@ -70,18 +70,8 @@ The part will disappear from CALENDAR and TODAY automatically.
 As a part moves through the shop:
 
 1. Find the part row in **MAIN**
-2. Click the **CURRENT STEP** cell (col AJ)
+2. Click the **CURRENT STEP** cell (col AK)
 3. Select the new step from the dropdown
 4. Run `Refresh Schedule.bat`
 
 The calendar will automatically hide completed processes (anything before the current step's date) and show only remaining work.
-
----
-
-## TV Display Setup
-
-1. Connect the factory floor TV/monitor to a computer
-2. Open `CMF WIP - Schedule.xlsx`
-3. Navigate to the **TODAY** tab
-4. Set Excel to full-screen / presentation mode (`View → Full Screen`)
-5. Run `Refresh Schedule.bat` each morning to update

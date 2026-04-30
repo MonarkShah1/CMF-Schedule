@@ -406,22 +406,24 @@ def repair_main_sheet(ws, title_text="CMF  WORK IN PROGRESS"):
     ws.auto_filter.ref = f"A{HDR_ROW}:{MAIN_COLS[-1][0]}{ws.max_row}"
 
     ws.conditional_formatting._cf_rules.clear()
-    first_col = get_column_letter(BLUE_FIRST)
-    last_col = get_column_letter(BLUE_LAST)
-    rng = f"{first_col}{DATA_START}:{last_col}{ws.max_row}"
-    ws.conditional_formatting.add(rng, FormulaRule(
-        formula=[f"AND({first_col}{DATA_START}<>\"\",ISNUMBER({first_col}{DATA_START}),{first_col}{DATA_START}<TODAY())"],
-        fill=_fill(C_RED_LT), font=Font(color="CC0000", bold=True),
-    ))
-    ws.conditional_formatting.add(rng, FormulaRule(
-        formula=[f"AND({first_col}{DATA_START}<>\"\",ISNUMBER({first_col}{DATA_START}),{first_col}{DATA_START}>=TODAY(),{first_col}{DATA_START}<TODAY()+4)"],
-        fill=_fill(C_YELLOW), font=Font(color="806000", bold=True),
-    ))
+    if ws.max_row >= DATA_START:
+        first_col = get_column_letter(BLUE_FIRST)
+        last_col = get_column_letter(BLUE_LAST)
+        rng = f"{first_col}{DATA_START}:{last_col}{ws.max_row}"
+        ws.conditional_formatting.add(rng, FormulaRule(
+            formula=[f"AND({first_col}{DATA_START}<>\"\",ISNUMBER({first_col}{DATA_START}),{first_col}{DATA_START}<TODAY())"],
+            fill=_fill(C_RED_LT), font=Font(color="CC0000", bold=True),
+        ))
+        ws.conditional_formatting.add(rng, FormulaRule(
+            formula=[f"AND({first_col}{DATA_START}<>\"\",ISNUMBER({first_col}{DATA_START}),{first_col}{DATA_START}>=TODAY(),{first_col}{DATA_START}<TODAY()+4)"],
+            fill=_fill(C_YELLOW), font=Font(color="806000", bold=True),
+        ))
 
     ws.data_validations.dataValidation = []
-    dv = DataValidation(type="list", formula1=f'"{STEP_LIST}"', allow_blank=True, showErrorMessage=False)
-    dv.sqref = f"AK{DATA_START}:AK{ws.max_row}"
-    ws.add_data_validation(dv)
+    if ws.max_row >= DATA_START:
+        dv = DataValidation(type="list", formula1=f'"{STEP_LIST}"', allow_blank=True, showErrorMessage=False)
+        dv.sqref = f"AK{DATA_START}:AK{ws.max_row}"
+        ws.add_data_validation(dv)
 
     print(f"  MAIN-REPAIR: styled {styled_headers} header row(s), {styled_parts} part row(s), autofilled {autofilled} key cell(s)")
 
@@ -1236,10 +1238,13 @@ if __name__ == "__main__":
     print("Normalizing image anchors ...")
     normalize_image_anchors(wb)
 
-    # Sheet tab order: MAIN | CALENDAR | PURCHASING | LOG
-    for name in ["LOG","PURCHASING","CALENDAR","MAIN"]:
-        if name in wb.sheetnames:
-            wb.move_sheet(name, offset=-len(wb.sheetnames))
+    if "MERGE CHANGES" in wb.sheetnames:
+        del wb["MERGE CHANGES"]
+
+    desired_order = ["ADMIN INPUT", "MAIN", "CALENDAR", "PURCHASING", "LOG"]
+    ordered = [wb[name] for name in desired_order if name in wb.sheetnames]
+    remaining = [ws for ws in wb.worksheets if ws.title not in desired_order]
+    wb._sheets = ordered + remaining
 
     print(f"Saving   {FILE}")
     wb.save(FILE)

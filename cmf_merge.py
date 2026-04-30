@@ -665,10 +665,8 @@ def merge():
     ws_out.freeze_panes = f"A{DATA}"
     ws_out.auto_filter.ref = f"A{HDR}:{LAST}{out_row - 1}"
 
-    build_change_log_sheet(
-        wb_sch, wip_path, sch_path, wip_summary_by_wo, sch_summary_by_wo,
-        new_wos, removed_wos, ship_date_updates, routing_counts_by_wo, missing_routing_by_wo
-    )
+    if "MERGE CHANGES" in wb_sch.sheetnames:
+        del wb_sch["MERGE CHANGES"]
 
     print(f"\n  Result: {wo_count} WOs | {part_count} parts | "
           f"{routing_count} parts with routing | {img_count} screenshots")

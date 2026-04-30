@@ -26,6 +26,7 @@ from collections import OrderedDict
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.units import pixels_to_EMU
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.drawing.image import Image as XLImage
@@ -51,6 +52,8 @@ IMG_W      = 85    # pixels
 IMG_H      = 48    # pixels
 COL_I_W    = 13    # chars  ≈ 91 px
 PART_ROW_H = 52    # points ≈ 69 px  (≥ IMG_H for consistent in-cell look)
+IMG_PAD_X  = 2
+IMG_PAD_Y  = 2
 
 # ── Column definitions (A–AL = 38 columns) ───────────────────────────────────
 COLS = [
@@ -127,12 +130,21 @@ def copy_image(src_img, dest_ws, col_1idx, row_1idx):
         raw = src_img._data()
         buf = _UnclosableBytesIO(raw)
         img = XLImage(buf)
-        c0, r0      = col_1idx - 1, row_1idx - 1
-        anchor      = TwoCellAnchor()
-        anchor.editAs  = 'twoCell'
-        anchor._from   = AnchorMarker(col=c0,   colOff=0, row=r0,   rowOff=0)
-        anchor.to      = AnchorMarker(col=c0+1, colOff=0, row=r0+1, rowOff=0)
-        img.anchor  = anchor
+        c0, r0 = col_1idx - 1, row_1idx - 1
+        anchor = TwoCellAnchor(editAs='twoCell')
+        anchor._from = AnchorMarker(
+            col=c0,
+            colOff=pixels_to_EMU(IMG_PAD_X),
+            row=r0,
+            rowOff=pixels_to_EMU(IMG_PAD_Y),
+        )
+        anchor.to = AnchorMarker(
+            col=c0,
+            colOff=pixels_to_EMU(IMG_PAD_X + IMG_W),
+            row=r0,
+            rowOff=pixels_to_EMU(IMG_PAD_Y + IMG_H),
+        )
+        img.anchor = anchor
         dest_ws.add_image(img)
         return True
     except Exception:

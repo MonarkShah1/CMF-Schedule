@@ -26,6 +26,30 @@ CALENDAR and PURCHASING update automatically.
 
 ---
 
+## Daily — Marking Work Complete
+
+1. Open `CMF WIP - Schedule.xlsx`
+2. Go to **CALENDAR** or **PURCHASING**
+3. Find the completed process card
+4. Select your name in **UPDATED BY**
+5. Mark the card green
+6. Save and close Excel
+7. Run `Refresh Schedule.bat`
+
+The rebuild only advances MAIN when the card is green **and** UPDATED BY has a name.
+
+---
+
+## Daily — End-of-Day Sign-Off
+
+1. Open `CMF WIP - Schedule.xlsx` → go to **LOG**
+2. Review today's completion rows
+3. Set **PM REVIEW** to `OK`, `ISSUE`, or `NEEDS CHECK`
+4. Fill **REVIEWED BY**, **OWNER / STATION**, **ISSUE NOTES**, and **RESOLUTION** when follow-up is needed
+5. Use the date banner row to record the production manager sign-off for the day
+
+---
+
 ## Weekly — Boss Sends Updated WIP
 
 When the boss updates dates or adds new orders in the original WIP Google Sheets:

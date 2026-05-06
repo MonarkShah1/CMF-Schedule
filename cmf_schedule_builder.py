@@ -200,6 +200,11 @@ CALENDAR_STATION_KEYS = {
     if s[0] not in PURCHASING_STATION_KEYS and s[0] != "SHIPPING"
 }
 
+SETTINGS_SHEET = "SETTINGS"
+SETTINGS_NAME_FIRST_ROW = 2
+SETTINGS_NAME_LAST_ROW = 101
+SETTINGS_NAME_RANGE = f"'{SETTINGS_SHEET}'!$A${SETTINGS_NAME_FIRST_ROW}:$A${SETTINGS_NAME_LAST_ROW}"
+
 
 # ── Image helpers ─────────────────────────────────────────────────────────────
 class _UnclosableBytesIO(io.BytesIO):
@@ -220,6 +225,46 @@ def protect_workbook_images(wb):
     for ws in wb.worksheets:
         for img in ws._images:
             _protect_image(img)
+
+
+# ── SETTINGS sheet ───────────────────────────────────────────────────────────
+def ensure_settings_sheet(wb):
+    """Create/repair the editable employee-name source for dropdowns."""
+    if SETTINGS_SHEET in wb.sheetnames:
+        ws = wb[SETTINGS_SHEET]
+    else:
+        ws = wb.create_sheet(SETTINGS_SHEET)
+
+    ws.sheet_view.showGridLines = False
+    ws.column_dimensions["A"].width = 26
+    ws.column_dimensions["B"].width = 54
+
+    c = ws["A1"]
+    c.value = "EMPLOYEE NAMES"
+    c.font = _font(bold=True, color=C_WHITE, size=11)
+    c.fill = _fill(C_NAVY)
+    c.alignment = _align(h="left")
+
+    c = ws["B1"]
+    c.value = "Add one name per row below. CALENDAR, PURCHASING, and LOG dropdowns use this list."
+    c.font = _font(bold=True, color=C_DGRAY, size=9)
+    c.fill = _fill(C_YELLOW)
+    c.alignment = _align(h="left", wrap=True)
+
+    for row in range(SETTINGS_NAME_FIRST_ROW, SETTINGS_NAME_LAST_ROW + 1):
+        ws.cell(row, 1).border = _border("DDDDDD")
+
+    ws.freeze_panes = "A2"
+    return ws
+
+
+def _employee_name_validation():
+    return DataValidation(
+        type="list",
+        formula1=f"={SETTINGS_NAME_RANGE}",
+        allow_blank=True,
+        showErrorMessage=False,
+    )
 
 
 def _set_two_cell_anchor(img, col_1idx, row_1idx, width_px, height_px, pad_x=IMG_PAD_X, pad_y=IMG_PAD_Y):
@@ -691,7 +736,7 @@ def parse_main(ws):
 
 
 # ── CALENDAR ─────────────────────────────────────────────────────────────────
-#   STATUS | DUE | COMPANY | WO# | QTY | PHOTO
+#   STATUS | DUE | COMPANY | WO# | PART# | QTY | UPDATED BY | PHOTO
 # ── CALENDAR — Horizontal Kanban ─────────────────────────────────────────────
 # Columns = stations, items stacked under each station sorted by date.
 # Makes it easy for PM to see workstation loading and queue depth at a glance.
@@ -699,11 +744,13 @@ def parse_main(ws):
 #  Row 1: Title
 #  Row 2: Overdue status banner
 #  Row 3: Station headers (colored, merged across sub-cols)
-#  Row 4: Sub-headers: STATUS | DUE | COMPANY | WO # | QTY | PHOTO per station
+#  Row 4: Sub-headers: STATUS | DUE | COMPANY | WO # | PART # | QTY | PHOTO per station
 #  Row 5+: Items sorted date-ascending (overdue at top in coral)
 
-CAL_SUB    = [("_ID", 0.5), ("STATUS", 8), ("DUE", 6), ("SHIP", 6), ("COMPANY", 11), ("WO #", 6), ("QTY", 7), ("PHOTO", 11)]
-CAL_SUB_N  = len(CAL_SUB)   # 8 sub-cols (first is hidden row ID)
+CAL_SUB    = [("_ID", 0.5), ("STATUS", 8), ("DUE", 6), ("SHIP", 6), ("COMPANY", 11), ("WO #", 6), ("PART #", 14), ("QTY", 7), ("UPDATED BY", 14), ("PHOTO", 11)]
+CAL_SUB_N  = len(CAL_SUB)   # sub-cols per card (first is hidden row ID)
+CAL_UPDATED_BY_OFFSET = next(i for i, (lbl, _) in enumerate(CAL_SUB) if lbl == "UPDATED BY")
+CAL_PHOTO_OFFSET = next(i for i, (lbl, _) in enumerate(CAL_SUB) if lbl == "PHOTO")
 CAL_DIV_W  = 1               # divider col between stations
 CAL_BLOCK  = CAL_SUB_N + CAL_DIV_W  # data cols + divider per station
 CAL_ROW_H  = 52              # tall enough for photo thumbnails
@@ -711,6 +758,16 @@ CAL_IMG_W  = 68              # photo width in pixels
 CAL_IMG_H  = 44              # photo height in pixels
 
 CAL_STATION_COLOR = {s[0]: s[3] for s in STATIONS}
+
+
+def _board_due_display(due_dt, today):
+    if not isinstance(due_dt, datetime):
+        return "—"
+    days = (due_dt.date() - today).days
+    date_part = f"{due_dt.month}/{due_dt.day}"
+    if 0 <= days <= 6:
+        return f"{due_dt.strftime('%a')} {date_part}"
+    return date_part
 
 
 def _build_horizontal_board(wb, sheet_name, title, entries, row_to_img, station_keys=None):
@@ -806,6 +863,9 @@ def _build_horizontal_board(wb, sheet_name, title, entries, row_to_img, station_
         ws.cell(4, sc + CAL_SUB_N).fill = _fill("D0D0D0")
 
     # ── Rows 5+: Item cards ───────────────────────────────────────────────────
+    employee_dv = _employee_name_validation()
+    ws.add_data_validation(employee_dv)
+
     for item_idx in range(max_items):
         row = 5 + item_idx
         ws.row_dimensions[row].height = CAL_ROW_H
@@ -822,13 +882,13 @@ def _build_horizontal_board(wb, sheet_name, title, entries, row_to_img, station_
                 bg      = "FCA5A5" if is_od else (C_YELLOW if is_soon else STATION_ROW_C[s[0]])
                 due_fg  = "CC0000" if is_od else C_DGRAY
                 status  = e.get("step_status", "")
-                due_str = f"{e['date'].month}/{e['date'].day}"
+                due_str = _board_due_display(e["date"], today)
 
-                # _ID | STATUS | DUE | SHIP | COMPANY | WO# | QTY | PHOTO
+                # _ID | STATUS | DUE | SHIP | COMPANY | WO# | PART# | QTY | UPDATED BY | PHOTO
                 dd = e.get("delivery_date")
                 ship_str = f"{dd.month}/{dd.day}" if dd else "—"
                 id_val = f"{e['main_row']}|{e['s_key']}"
-                vals = [id_val, status, due_str, ship_str, e["company"], e["wo"], e["qty"], None]
+                vals = [id_val, status, due_str, ship_str, e["company"], e["wo"], e["part_no"], e["qty"], None, None]
                 for i, val in enumerate(vals):
                     c = ws.cell(row, sc + i, val)
 
@@ -858,12 +918,19 @@ def _build_horizontal_board(wb, sheet_name, title, entries, row_to_img, station_
                     elif i == 4:    # COMPANY
                         c.fill = _fill(bg)
                         c.font = _font(bold=True, size=10)
+                    elif i == CAL_UPDATED_BY_OFFSET:
+                        c.fill = _fill(bg)
+                        c.font = _font(size=9)
+                        employee_dv.add(c)
+                    elif i == 6:    # PART #
+                        c.fill = _fill(bg)
+                        c.font = _font(size=9)
                     else:           # WO#, QTY, and PHOTO placeholder
                         c.fill = _fill(bg); c.font = _font(size=10)
 
-                # Screenshot in PHOTO column (sub-col index 7 = sc+7)
+                # Screenshot in PHOTO column
                 if e["main_row"] in row_to_img:
-                    copy_image(row_to_img[e["main_row"]], ws, sc + 7, row)
+                    copy_image(row_to_img[e["main_row"]], ws, sc + CAL_PHOTO_OFFSET, row)
             else:
                 # Empty slot — skip border on hidden ID column
                 for i in range(CAL_SUB_N):
@@ -942,21 +1009,25 @@ def _is_user_green(cell):
         return False
 
 
-def sync_green_completions(wb):
-    """Scan existing CALENDAR for rows the PM highlighted green.
+def _scan_green_completions_from_board(ws, sheet_name):
+    """Scan one horizontal board for rows highlighted green.
 
     Each station block's first sub-column (_ID) stores "main_row|s_key".
-    If any visible cell in that block has a user-green fill we record it.
-
-    Must be called BEFORE build_calendar() deletes the sheet.
-    Returns list of {"main_row": int, "s_key": str}.
+    If any visible cell in that block has a user-green fill and UPDATED BY is
+    filled in, we record it.
     """
-    if "CALENDAR" not in wb.sheetnames:
-        return []
-
-    ws   = wb["CALENDAR"]
-    seen = set()
     found = []
+    skipped_missing_name = []
+    has_updated_by = any(
+        str(ws.cell(4, c).value or "").strip().upper() == "UPDATED BY"
+        for c in range(1, ws.max_column + 1)
+    )
+    has_part_no = any(
+        str(ws.cell(4, c).value or "").strip().upper() == "PART #"
+        for c in range(1, ws.max_column + 1)
+    )
+    sub_n = CAL_SUB_N - (0 if has_updated_by else 1) - (0 if has_part_no else 1)
+    block_n = sub_n + CAL_DIV_W
 
     for row in range(5, ws.max_row + 1):
         col = 1
@@ -966,21 +1037,72 @@ def sync_green_completions(wb):
                 # Any visible cell in this block green?
                 block_green = any(
                     _is_user_green(ws.cell(row, col + offset))
-                    for offset in range(1, CAL_SUB_N)
+                    for offset in range(1, sub_n)
                 )
                 if block_green:
+                    updated_by = ""
+                    updated_by_offset = None
+                    for offset in range(1, sub_n):
+                        if str(ws.cell(4, col + offset).value or "").strip().upper() == "UPDATED BY":
+                            updated_by_offset = offset
+                            break
+                    if updated_by_offset is not None:
+                        updated_by = str(ws.cell(row, col + updated_by_offset).value or "").strip()
+                    if not updated_by:
+                        skipped_missing_name.append((row, col, id_val))
+                        col += block_n
+                        continue
+
                     parts = id_val.split("|", 1)
                     if len(parts) == 2:
                         try:
-                            key = (int(parts[0]), parts[1])
-                            if key not in seen:
-                                seen.add(key)
-                                found.append({"main_row": key[0], "s_key": key[1]})
+                            found.append({
+                                "main_row": int(parts[0]),
+                                "s_key": parts[1],
+                                "source_sheet": sheet_name,
+                                "updated_by": updated_by,
+                            })
                         except ValueError:
                             pass
-            col += CAL_BLOCK   # jump to next station block
+            col += block_n   # jump to next station block
 
-    print(f"  GREEN-SYNC: {len(found)} completion(s) detected in CALENDAR")
+    return found, skipped_missing_name
+
+
+def sync_green_completions(wb):
+    """Scan existing CALENDAR and PURCHASING boards for green completions.
+
+    Purchasing uses the same horizontal board layout and hidden row ID as
+    CALENDAR, so vendor/outside-work completions can update MAIN the same way.
+
+    Must be called BEFORE build_calendar()/build_purchasing() delete the sheets.
+    Returns list of {"main_row": int, "s_key": str}.
+    """
+    seen = set()
+    found = []
+
+    for sheet_name in ("CALENDAR", "PURCHASING"):
+        if sheet_name not in wb.sheetnames:
+            continue
+
+        sheet_found, skipped_missing_name = _scan_green_completions_from_board(wb[sheet_name], sheet_name)
+        print(f"  GREEN-SYNC: {len(sheet_found)} completion(s) detected in {sheet_name}")
+        if skipped_missing_name:
+            print(f"  GREEN-SYNC: {len(skipped_missing_name)} green row(s) skipped in {sheet_name} — UPDATED BY is blank")
+
+        for comp in sheet_found:
+            key = (comp["main_row"], comp["s_key"])
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append({
+                "main_row": comp["main_row"],
+                "s_key": comp["s_key"],
+                "updated_by": comp["updated_by"],
+                "updated_from": comp["source_sheet"],
+            })
+
+    print(f"  GREEN-SYNC: {len(found)} unique completion(s) detected")
     return found
 
 
@@ -1065,6 +1187,9 @@ def apply_completions(ws_main, completions):
             due_date       = completed_date,
             next_step      = next_step,
             delivery_date  = delivery_dt,
+            updated_by     = comp.get("updated_by", ""),
+            updated_from   = comp.get("updated_from", ""),
+            owner_station  = label,
         ))
 
     return records
@@ -1082,12 +1207,88 @@ _LOG_COLS = [
     ("WAS DUE",       10),
     ("NEXT STEP",     18),
     ("DELIVERY DATE", 14),
+    ("UPDATED BY",    16),
+    ("UPDATED FROM",  14),
+    ("PM REVIEW",     14),
+    ("REVIEWED BY",   16),
+    ("OWNER / STATION", 18),
+    ("ISSUE NOTES",   32),
+    ("RESOLUTION",    14),
 ]
-_LOG_NCOLS    = len(_LOG_COLS)          # 9
-_LOG_LAST_COL = get_column_letter(_LOG_NCOLS)  # "I"
+_LOG_NCOLS    = len(_LOG_COLS)
+_LOG_LAST_COL = get_column_letter(_LOG_NCOLS)
+_LOG_BASE_LAST_COL = "I"
+_LOG_PM_REVIEW_COL = 12
+_LOG_REVIEWED_BY_COL = 13
+_LOG_RESOLUTION_COL = 16
+
+_PM_REVIEW_LIST = "OK,ISSUE,NEEDS CHECK"
+_RESOLUTION_LIST = "Open,Resolved"
+
+
+def _unmerge_ranges_on_row(ws, row):
+    for merge_range in list(ws.merged_cells.ranges):
+        if merge_range.min_row <= row <= merge_range.max_row:
+            try:
+                ws.unmerge_cells(str(merge_range))
+            except KeyError:
+                try:
+                    ws.merged_cells.ranges.discard(merge_range)
+                except AttributeError:
+                    if merge_range in ws.merged_cells.ranges:
+                        ws.merged_cells.ranges.remove(merge_range)
+
+
+def _is_log_banner_row(ws, row):
+    val = str(ws.cell(row, 1).value or "").strip()
+    return bool(val) and row >= 3 and ws.cell(row, 2).value is None
+
+
+def _add_log_validations(ws):
+    ws.data_validations.dataValidation = []
+
+    review_dv = DataValidation(type="list", formula1=f'"{_PM_REVIEW_LIST}"', allow_blank=True, showErrorMessage=False)
+    reviewer_dv = _employee_name_validation()
+    resolution_dv = DataValidation(type="list", formula1=f'"{_RESOLUTION_LIST}"', allow_blank=True, showErrorMessage=False)
+
+    ws.add_data_validation(review_dv)
+    ws.add_data_validation(reviewer_dv)
+    ws.add_data_validation(resolution_dv)
+
+    for row in range(3, max(ws.max_row, 300) + 1):
+        if _is_log_banner_row(ws, row):
+            reviewer_dv.add(ws.cell(row, 11))  # banner SIGNED BY cell
+            continue
+        review_dv.add(ws.cell(row, _LOG_PM_REVIEW_COL))
+        reviewer_dv.add(ws.cell(row, _LOG_REVIEWED_BY_COL))
+        resolution_dv.add(ws.cell(row, _LOG_RESOLUTION_COL))
+
+
+def _refresh_log_banner_summaries(ws):
+    for row in range(3, ws.max_row + 1):
+        if not _is_log_banner_row(ws, row):
+            continue
+
+        next_banner = ws.max_row + 1
+        for r in range(row + 1, ws.max_row + 1):
+            if _is_log_banner_row(ws, r):
+                next_banner = r
+                break
+
+        completion_count = 0
+        issue_count = 0
+        for r in range(row + 1, next_banner):
+            if ws.cell(r, 1).value is None and ws.cell(r, 2).value is None:
+                continue
+            completion_count += 1
+            if str(ws.cell(r, _LOG_PM_REVIEW_COL).value or "").strip().upper() == "ISSUE":
+                issue_count += 1
+
+        _write_log_date_banner(ws, row, str(ws.cell(row, 1).value or "").strip(), completion_count, issue_count)
 
 
 def _init_log_sheet(ws):
+    _unmerge_ranges_on_row(ws, 1)
     ws.row_dimensions[1].height = 30
     ws.merge_cells(f"A1:{_LOG_LAST_COL}1")
     c = ws["A1"]
@@ -1104,14 +1305,32 @@ def _init_log_sheet(ws):
         c.border    = _border(); c.alignment = _align()
 
     ws.freeze_panes = "A3"
+    _add_log_validations(ws)
 
 
-def _write_log_date_banner(ws, row, date_str):
-    ws.merge_cells(f"A{row}:{_LOG_LAST_COL}{row}")
-    c = ws.cell(row, 1, f"  {date_str}")
+def _write_log_date_banner(ws, row, date_str, completion_count=0, issue_count=0):
+    _unmerge_ranges_on_row(ws, row)
+    clean_date = str(date_str or "").strip()
+    ws.merge_cells(f"A{row}:{_LOG_BASE_LAST_COL}{row}")
+    c = ws.cell(row, 1, f"  {clean_date}")
     c.font      = _font(bold=True, color=C_WHITE, size=10)
     c.fill      = _fill(C_STEEL_DK); c.alignment = _align(h="left")
     ws.row_dimensions[row].height = 18
+
+    signoff_vals = [
+        "SIGNED BY",
+        ws.cell(row, 11).value,
+        "COMPLETIONS",
+        completion_count,
+        "ISSUES",
+        issue_count,
+    ]
+    for offset, val in enumerate(signoff_vals, 10):
+        c = ws.cell(row, offset, val)
+        c.fill = _fill(C_STEEL_DK if offset in (10, 12, 14) else C_LGRAY)
+        c.font = _font(bold=True if offset in (10, 12, 14) else False, color=C_WHITE if offset in (10, 12, 14) else C_DGRAY, size=9)
+        c.border = _border("1F4E79")
+        c.alignment = _align(h="left" if offset == 11 else "center")
 
 
 def _write_log_row(ws, row, rec, alt=False):
@@ -1127,12 +1346,19 @@ def _write_log_row(ws, row, rec, alt=False):
         rec["due_date"].strftime("%m/%d") if isinstance(rec["due_date"], datetime) else "—",
         rec["next_step"],
         rec["delivery_date"].strftime("%m/%d/%Y") if rec["delivery_date"] else "—",
+        rec.get("updated_by", ""),
+        rec.get("updated_from", ""),
+        "NEEDS CHECK",
+        "",
+        rec.get("owner_station", rec.get("process", "")),
+        "",
+        "Open",
     ]
     for i, val in enumerate(vals, 1):
         c = ws.cell(row, i, val)
         c.fill      = _fill(bg); c.border = _border()
-        c.font      = _font(size=9, bold=(i in (2, 6, 8)))
-        c.alignment = _align(h="left" if i in (3, 4, 5, 8) else "center")
+        c.font      = _font(size=9, bold=(i in (2, 6, 8, 10, 12)))
+        c.alignment = _align(h="left" if i in (3, 4, 5, 8, 10, 13, 15, 16) else "center", wrap=(i in (5, 16)))
 
 
 def record_completions_to_log(wb, records):
@@ -1155,8 +1381,7 @@ def record_completions_to_log(wb, records):
         needs_banner = True
     else:
         ws = wb["LOG"]
-        if not ws.cell(2, 1).value:   # re-init if headers missing
-            _init_log_sheet(ws)
+        _init_log_sheet(ws)
 
         # Check if row 3 already has today's date banner (same-day re-run)
         banner_val = str(ws.cell(3, 1).value or "").strip()
@@ -1191,6 +1416,8 @@ def record_completions_to_log(wb, records):
     for i, rec in enumerate(records):
         _write_log_row(ws, r + i, rec, i % 2 == 0)
 
+    _refresh_log_banner_summaries(ws)
+    _add_log_validations(ws)
     print(f"  LOG: {len(records)} completion(s) recorded — {today_str}")
 
 
@@ -1206,12 +1433,19 @@ if __name__ == "__main__":
     if "MAIN" not in wb.sheetnames:
         print("ERROR: No MAIN sheet. Run cmf_migrate_main.py first."); raise SystemExit(1)
 
+    print("Checking SETTINGS employee list ...")
+    ensure_settings_sheet(wb)
+    if "LOG" in wb.sheetnames:
+        _init_log_sheet(wb["LOG"])
+        _refresh_log_banner_summaries(wb["LOG"])
+        _add_log_validations(wb["LOG"])
+
     print("Checking MAIN column layout ...")
     ensure_ship_vendor_col(wb["MAIN"])
     if "ADMIN INPUT" in wb.sheetnames:
         ensure_ship_vendor_col(wb["ADMIN INPUT"])
 
-    print("Syncing green completions from CALENDAR ...")
+    print("Syncing green completions from CALENDAR + PURCHASING ...")
     completions = sync_green_completions(wb)
 
     if completions:
@@ -1241,7 +1475,7 @@ if __name__ == "__main__":
     if "MERGE CHANGES" in wb.sheetnames:
         del wb["MERGE CHANGES"]
 
-    desired_order = ["ADMIN INPUT", "MAIN", "CALENDAR", "PURCHASING", "LOG"]
+    desired_order = ["ADMIN INPUT", "MAIN", "CALENDAR", "PURCHASING", "LOG", "SETTINGS"]
     ordered = [wb[name] for name in desired_order if name in wb.sheetnames]
     remaining = [ws for ws in wb.worksheets if ws.title not in desired_order]
     wb._sheets = ordered + remaining

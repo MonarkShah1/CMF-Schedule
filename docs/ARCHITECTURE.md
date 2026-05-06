@@ -92,7 +92,9 @@ Each station block contains:
 - SHIP
 - COMPANY
 - WO #
+- PART #
 - QTY
+- UPDATED BY
 - PHOTO
 
 ### How it works
@@ -133,7 +135,21 @@ Columns:
 - PART #
 - DESCRIPTION
 - QTY
+- UPDATED BY
 - PHOTO
+
+## LOG Tab
+
+Audit trail for completed process marks:
+
+- Completion rows are created only when CALENDAR/PURCHASING has a green card and UPDATED BY is filled in
+- UPDATED BY records who marked the process complete
+- PM REVIEW, REVIEWED BY, OWNER / STATION, ISSUE NOTES, and RESOLUTION support end-of-day sign-off
+- Date banner rows summarize completion and issue counts for the day
+
+## SETTINGS Tab
+
+Editable source list for employee dropdowns used by CALENDAR, PURCHASING, and LOG.
 
 ---
 

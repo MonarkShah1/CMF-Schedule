@@ -1055,6 +1055,27 @@ def _board_header_offset(ws, start_col, sub_n, label):
     return None
 
 
+def _norm_match_key(val):
+    """Normalize visible board identifiers so they survive Excel type changes."""
+    if val is None:
+        return None
+    s = str(val).strip()
+    try:
+        f = float(s)
+        if f == int(f):
+            s = str(int(f))
+    except ValueError:
+        pass
+    return s or None
+
+
+def _board_value(ws, row, start_col, sub_n, label):
+    offset = _board_header_offset(ws, start_col, sub_n, label)
+    if offset is None:
+        return None
+    return ws.cell(row, start_col + offset).value
+
+
 def _scan_green_completions_from_board(ws, sheet_name):
     """Scan one horizontal board for rows highlighted green.
 
@@ -1095,6 +1116,10 @@ def _scan_green_completions_from_board(ws, sheet_name):
                                 "s_key": parts[1],
                                 "source_sheet": sheet_name,
                                 "updated_by": updated_by,
+                                "visible_wo": _board_value(ws, row, col, sub_n, "WO #"),
+                                "visible_part": _board_value(ws, row, col, sub_n, "PART #"),
+                                "visible_company": _board_value(ws, row, col, sub_n, "COMPANY"),
+                                "visible_qty": _board_value(ws, row, col, sub_n, "QTY"),
                             })
                         except ValueError:
                             pass
@@ -1103,6 +1128,65 @@ def _scan_green_completions_from_board(ws, sheet_name):
             col += 1
 
     return found, skipped_missing_name
+
+
+def _build_main_row_index(ws_main):
+    by_wo_part = {}
+    by_wo_company_qty = defaultdict(list)
+    by_wo = defaultdict(list)
+
+    for row in range(DATA_START, ws_main.max_row + 1):
+        kind = _main_row_kind(ws_main, row)
+        if kind != "part":
+            continue
+        wo = _norm_match_key(ws_main.cell(row, COL_WO).value)
+        if not wo:
+            continue
+        part = _norm_match_key(ws_main.cell(row, COL_PARTNO).value)
+        company = _norm_match_key(ws_main.cell(row, COL_COMPANY).value)
+        qty = _norm_match_key(ws_main.cell(row, COL_QTY).value)
+
+        by_wo[wo].append(row)
+        if part:
+            by_wo_part.setdefault((wo, part), row)
+        by_wo_company_qty[(wo, company, qty)].append(row)
+
+    return {
+        "by_wo_part": by_wo_part,
+        "by_wo_company_qty": by_wo_company_qty,
+        "by_wo": by_wo,
+    }
+
+
+def _resolve_completion_main_row(comp, ws_main, row_index):
+    """Prefer visible card identity over the hidden row ID.
+
+    The board's hidden _ID includes an old MAIN row number. That row number can
+    become stale when MAIN is edited, rebuilt, or repartitioned, while the
+    visible WO/part/qty on the card still describes the operator's intent.
+    """
+    wo = _norm_match_key(comp.get("visible_wo"))
+    part = _norm_match_key(comp.get("visible_part"))
+    company = _norm_match_key(comp.get("visible_company"))
+    qty = _norm_match_key(comp.get("visible_qty"))
+
+    if wo and part:
+        row = row_index["by_wo_part"].get((wo, part))
+        if row:
+            return row
+
+    if wo:
+        candidates = row_index["by_wo_company_qty"].get((wo, company, qty), [])
+        if len(candidates) == 1:
+            return candidates[0]
+        candidates = row_index["by_wo"].get(wo, [])
+        if len(candidates) == 1:
+            return candidates[0]
+
+    main_row = comp["main_row"]
+    if DATA_START <= main_row <= ws_main.max_row:
+        return main_row
+    return None
 
 
 def sync_green_completions(wb):
@@ -1117,6 +1201,7 @@ def sync_green_completions(wb):
     PENDING_GREEN_HIGHLIGHTS.clear()
     seen = set()
     found = []
+    row_index = _build_main_row_index(wb["MAIN"]) if "MAIN" in wb.sheetnames else None
 
     for sheet_name in ("CALENDAR", "PURCHASING"):
         if sheet_name not in wb.sheetnames:
@@ -1131,6 +1216,17 @@ def sync_green_completions(wb):
                     PENDING_GREEN_HIGHLIGHTS[id_val] = green_fill
 
         for comp in sheet_found:
+            if row_index is not None:
+                resolved_row = _resolve_completion_main_row(comp, wb["MAIN"], row_index)
+                if resolved_row is None:
+                    continue
+                if resolved_row != comp["main_row"]:
+                    print(
+                        f"  GREEN-SYNC: remapped stale ID row {comp['main_row']} → {resolved_row} "
+                        f"for WO {comp.get('visible_wo')} [{STATION_NAME.get(comp['s_key'], comp['s_key'])}]"
+                    )
+                comp["main_row"] = resolved_row
+
             key = (comp["main_row"], comp["s_key"])
             if key in seen:
                 continue
@@ -1140,6 +1236,8 @@ def sync_green_completions(wb):
                 "s_key": comp["s_key"],
                 "updated_by": comp["updated_by"],
                 "updated_from": comp["source_sheet"],
+                "visible_wo": comp.get("visible_wo"),
+                "visible_part": comp.get("visible_part"),
             })
 
     print(f"  GREEN-SYNC: {len(found)} unique completion(s) detected")

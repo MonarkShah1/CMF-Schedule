@@ -8,7 +8,7 @@ Flow:  MAIN → CALENDAR (production) + PURCHASING (outside/vendor work)
 Usage: python3 cmf_schedule_builder.py
 """
 
-import os, io
+import os, io, copy
 from collections import OrderedDict
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -42,6 +42,7 @@ COL_PARTNO       = 6    # F
 COL_DESC         = 7    # G
 COL_QTY          = 8    # H
 COL_SCREENSHOT   = 9    # I
+COL_THICKNESS    = 11   # K
 COL_CURRENT_STEP = 37   # AK  (shifted after SHIP TO VENDOR col inserted at AI/35)
 COL_STATUS       = 38   # AL
 HDR_ROW          = 2
@@ -658,6 +659,7 @@ def parse_main(ws):
         part_no = ws.cell(row, COL_PARTNO).value
         desc    = ws.cell(row, COL_DESC).value
         qty     = ws.cell(row, COL_QTY).value
+        thick   = ws.cell(row, COL_THICKNESS).value
         company = ws.cell(row, COL_COMPANY).value
         po      = ws.cell(row, COL_PO).value
         status  = str(ws.cell(row, COL_STATUS).value or "").strip().upper()
@@ -724,6 +726,7 @@ def parse_main(ws):
                     company       = company or "",
                     part_no       = str(part_no or "").strip(),
                     desc          = str(desc    or "").strip(),
+                    thickness     = str(thick   or "").strip(),
                     qty           = qty,
                     current_step  = curr_raw or "—",
                     processes_left= processes_left,
@@ -736,7 +739,7 @@ def parse_main(ws):
 
 
 # ── CALENDAR ─────────────────────────────────────────────────────────────────
-#   STATUS | DUE | COMPANY | WO# | PART# | QTY | UPDATED BY | PHOTO
+#   STATUS | DUE | COMPANY | WO# | PART# | THICK | QTY | UPDATED BY | PHOTO
 # ── CALENDAR — Horizontal Kanban ─────────────────────────────────────────────
 # Columns = stations, items stacked under each station sorted by date.
 # Makes it easy for PM to see workstation loading and queue depth at a glance.
@@ -744,10 +747,10 @@ def parse_main(ws):
 #  Row 1: Title
 #  Row 2: Overdue status banner
 #  Row 3: Station headers (colored, merged across sub-cols)
-#  Row 4: Sub-headers: STATUS | DUE | COMPANY | WO # | PART # | QTY | PHOTO per station
+#  Row 4: Sub-headers: STATUS | DUE | COMPANY | WO # | PART # | THICK | QTY | PHOTO per station
 #  Row 5+: Items sorted date-ascending (overdue at top in coral)
 
-CAL_SUB    = [("_ID", 0.5), ("STATUS", 8), ("DUE", 6), ("SHIP", 6), ("COMPANY", 11), ("WO #", 6), ("PART #", 14), ("QTY", 7), ("UPDATED BY", 14), ("PHOTO", 11)]
+CAL_SUB    = [("_ID", 0.5), ("STATUS", 8), ("DUE", 6), ("SHIP", 6), ("COMPANY", 11), ("WO #", 6), ("PART #", 14), ("THICK", 7), ("QTY", 7), ("UPDATED BY", 14), ("PHOTO", 11)]
 CAL_SUB_N  = len(CAL_SUB)   # sub-cols per card (first is hidden row ID)
 CAL_UPDATED_BY_OFFSET = next(i for i, (lbl, _) in enumerate(CAL_SUB) if lbl == "UPDATED BY")
 CAL_PHOTO_OFFSET = next(i for i, (lbl, _) in enumerate(CAL_SUB) if lbl == "PHOTO")
@@ -758,6 +761,15 @@ CAL_IMG_W  = 68              # photo width in pixels
 CAL_IMG_H  = 44              # photo height in pixels
 
 CAL_STATION_COLOR = {s[0]: s[3] for s in STATIONS}
+PENDING_GREEN_HIGHLIGHTS = {}
+
+_TEMPLATE_FILL_HEXES = {
+    C_NAVY, C_WHITE, C_GOLD, C_STEEL_DK, C_LGRAY, C_DGRAY, C_YELLOW,
+    C_RED_LT, C_GREEN_LT, "FCA5A5", "DBEAFE", "F3F4F6", "D0D0D0",
+    "DDDDDD", "CCCCCC", "AAAAAA",
+}
+_TEMPLATE_FILL_HEXES.update(s[2] for s in STATIONS)
+_TEMPLATE_FILL_HEXES.update(s[3] for s in STATIONS)
 
 
 def _board_due_display(due_dt, today):
@@ -884,24 +896,28 @@ def _build_horizontal_board(wb, sheet_name, title, entries, row_to_img, station_
                 status  = e.get("step_status", "")
                 due_str = _board_due_display(e["date"], today)
 
-                # _ID | STATUS | DUE | SHIP | COMPANY | WO# | PART# | QTY | UPDATED BY | PHOTO
+                # _ID | STATUS | DUE | SHIP | COMPANY | WO# | PART# | THICK | QTY | UPDATED BY | PHOTO
                 dd = e.get("delivery_date")
                 ship_str = f"{dd.month}/{dd.day}" if dd else "—"
                 id_val = f"{e['main_row']}|{e['s_key']}"
-                vals = [id_val, status, due_str, ship_str, e["company"], e["wo"], e["part_no"], e["qty"], None, None]
+                vals = [id_val, status, due_str, ship_str, e["company"], e["wo"], e["part_no"], e["thickness"], e["qty"], None, None]
+                pending_green_fill = PENDING_GREEN_HIGHLIGHTS.get(id_val)
                 for i, val in enumerate(vals):
                     c = ws.cell(row, sc + i, val)
 
                     if i == 0:      # hidden ID — invisible text, no border
-                        c.fill = _fill(bg)
-                        c.font = _font(size=6, color=bg)
+                        c.fill = pending_green_fill or _fill(bg)
+                        c.font = _font(size=6, color="92D050" if pending_green_fill else bg)
                         continue
 
                     c.border    = _border("CCCCCC")
                     c.alignment = _align(h="left" if i == 4 else "center")
 
                     if i == 1:      # STATUS label — coloured independently
-                        if status == "▶ READY":
+                        if pending_green_fill:
+                            c.fill = pending_green_fill
+                            c.font = _font(bold=True, size=9, color=C_DGRAY)
+                        elif status == "▶ READY":
                             c.fill = _fill("DBEAFE")
                             c.font = _font(bold=True, size=9, color="1E40AF")
                         elif status.startswith("⏳"):
@@ -910,23 +926,23 @@ def _build_horizontal_board(wb, sheet_name, title, entries, row_to_img, station_
                         else:
                             c.fill = _fill(bg); c.font = _font(size=9)
                     elif i == 2:    # DUE date
-                        c.fill = _fill(bg)
+                        c.fill = pending_green_fill or _fill(bg)
                         c.font = _font(bold=True, size=10, color=due_fg)
                     elif i == 3:    # SHIP date
-                        c.fill = _fill(bg)
+                        c.fill = pending_green_fill or _fill(bg)
                         c.font = _font(size=9, color="6B7280")
                     elif i == 4:    # COMPANY
-                        c.fill = _fill(bg)
+                        c.fill = pending_green_fill or _fill(bg)
                         c.font = _font(bold=True, size=10)
                     elif i == CAL_UPDATED_BY_OFFSET:
-                        c.fill = _fill(bg)
+                        c.fill = pending_green_fill or _fill(bg)
                         c.font = _font(size=9)
                         employee_dv.add(c)
                     elif i == 6:    # PART #
-                        c.fill = _fill(bg)
+                        c.fill = pending_green_fill or _fill(bg)
                         c.font = _font(size=9)
-                    else:           # WO#, QTY, and PHOTO placeholder
-                        c.fill = _fill(bg); c.font = _font(size=10)
+                    else:           # WO#, THICK, QTY, and PHOTO placeholder
+                        c.fill = pending_green_fill or _fill(bg); c.font = _font(size=10)
 
                 # Screenshot in PHOTO column
                 if e["main_row"] in row_to_img:
@@ -979,9 +995,9 @@ def _is_user_green(cell):
     - Theme fills: index 6 = 'Olive Green, Accent 3' in the default Office theme.
       Excel saves theme-color picks without an explicit RGB value; openpyxl
       returns type='theme' with theme=6 for these cells.
-    - Explicit RGB fills: G-B>30 AND G>R AND avg_brightness<200.
-      Catches olive/army greens like 8FAF46/9BBB59 while ignoring our own
-      pastel template fills which all have average brightness > 200.
+    - Explicit RGB fills: green is the dominant channel, including light
+      Excel greens. Known schedule template fills are excluded first so normal
+      board colors do not count as operator completions.
     """
     try:
         fill = cell.fill
@@ -1003,10 +1019,40 @@ def _is_user_green(cell):
             r = int(rgb[0:2], 16); g = int(rgb[2:4], 16); b = int(rgb[4:6], 16)
         else:
             return False
-        avg = (r + g + b) // 3
-        return (g - b) > 30 and g > r and avg < 200
+        clean_rgb = f"{r:02X}{g:02X}{b:02X}"
+        if clean_rgb in _TEMPLATE_FILL_HEXES:
+            return False
+        return g >= 80 and g >= r + 8 and g >= b + 8
     except Exception:
         return False
+
+
+def _green_fill_for_preserve(cell):
+    if not _is_user_green(cell):
+        return None
+    try:
+        return copy.copy(cell.fill)
+    except Exception:
+        return _fill("92D050")
+
+
+def _board_subcol_count(ws, start_col):
+    """Return the number of sub-columns in a station block from row-4 headers."""
+    offset = 1
+    while start_col + offset <= ws.max_column:
+        header = str(ws.cell(4, start_col + offset).value or "").strip()
+        if not header:
+            break
+        offset += 1
+    return max(offset, 1)
+
+
+def _board_header_offset(ws, start_col, sub_n, label):
+    wanted = label.strip().upper()
+    for offset in range(1, sub_n):
+        if str(ws.cell(4, start_col + offset).value or "").strip().upper() == wanted:
+            return offset
+    return None
 
 
 def _scan_green_completions_from_board(ws, sheet_name):
@@ -1018,39 +1064,27 @@ def _scan_green_completions_from_board(ws, sheet_name):
     """
     found = []
     skipped_missing_name = []
-    has_updated_by = any(
-        str(ws.cell(4, c).value or "").strip().upper() == "UPDATED BY"
-        for c in range(1, ws.max_column + 1)
-    )
-    has_part_no = any(
-        str(ws.cell(4, c).value or "").strip().upper() == "PART #"
-        for c in range(1, ws.max_column + 1)
-    )
-    sub_n = CAL_SUB_N - (0 if has_updated_by else 1) - (0 if has_part_no else 1)
-    block_n = sub_n + CAL_DIV_W
 
     for row in range(5, ws.max_row + 1):
         col = 1
         while col <= ws.max_column:
             id_val = str(ws.cell(row, col).value or "")
             if "|" in id_val:
+                sub_n = _board_subcol_count(ws, col)
                 # Any visible cell in this block green?
-                block_green = any(
-                    _is_user_green(ws.cell(row, col + offset))
-                    for offset in range(1, sub_n)
-                )
-                if block_green:
+                green_fill = None
+                for offset in range(1, sub_n):
+                    green_fill = _green_fill_for_preserve(ws.cell(row, col + offset))
+                    if green_fill:
+                        break
+                if green_fill:
                     updated_by = ""
-                    updated_by_offset = None
-                    for offset in range(1, sub_n):
-                        if str(ws.cell(4, col + offset).value or "").strip().upper() == "UPDATED BY":
-                            updated_by_offset = offset
-                            break
+                    updated_by_offset = _board_header_offset(ws, col, sub_n, "UPDATED BY")
                     if updated_by_offset is not None:
                         updated_by = str(ws.cell(row, col + updated_by_offset).value or "").strip()
                     if not updated_by:
-                        skipped_missing_name.append((row, col, id_val))
-                        col += block_n
+                        skipped_missing_name.append((row, col, id_val, green_fill))
+                        col += sub_n + CAL_DIV_W
                         continue
 
                     parts = id_val.split("|", 1)
@@ -1064,7 +1098,9 @@ def _scan_green_completions_from_board(ws, sheet_name):
                             })
                         except ValueError:
                             pass
-            col += block_n   # jump to next station block
+                col += sub_n + CAL_DIV_W   # jump to next station block
+                continue
+            col += 1
 
     return found, skipped_missing_name
 
@@ -1078,6 +1114,7 @@ def sync_green_completions(wb):
     Must be called BEFORE build_calendar()/build_purchasing() delete the sheets.
     Returns list of {"main_row": int, "s_key": str}.
     """
+    PENDING_GREEN_HIGHLIGHTS.clear()
     seen = set()
     found = []
 
@@ -1089,6 +1126,9 @@ def sync_green_completions(wb):
         print(f"  GREEN-SYNC: {len(sheet_found)} completion(s) detected in {sheet_name}")
         if skipped_missing_name:
             print(f"  GREEN-SYNC: {len(skipped_missing_name)} green row(s) skipped in {sheet_name} — UPDATED BY is blank")
+            for _, _, id_val, green_fill in skipped_missing_name:
+                if green_fill:
+                    PENDING_GREEN_HIGHLIGHTS[id_val] = green_fill
 
         for comp in sheet_found:
             key = (comp["main_row"], comp["s_key"])
@@ -1120,9 +1160,9 @@ def apply_completions(ws_main, completions):
     if not completions:
         return []
 
-    records = []
-    today   = datetime.now()
+    today = datetime.now()
 
+    grouped = OrderedDict()
     for comp in completions:
         main_row = comp["main_row"]
         s_key    = comp["s_key"]
@@ -1131,7 +1171,6 @@ def apply_completions(ws_main, completions):
         if station_def is None:
             continue
         col_indices     = station_def[4]
-        completed_cols  = set(col_indices)
 
         # Pull context from MAIN
         wo           = ws_main.cell(main_row, COL_WO).value
@@ -1151,9 +1190,37 @@ def apply_completions(ws_main, completions):
         if completed_date is None:
             continue
 
-        # Next step: earliest remaining process date, skipping completed cols.
-        # Same-date steps at a higher column number are still "next" (not done).
-        max_completed_col = max(col_indices)
+        grouped.setdefault(main_row, []).append({
+            "comp": comp,
+            "station_def": station_def,
+            "completed_date": completed_date,
+            "wo": wo,
+            "company": company,
+            "part_no": part_no,
+            "desc": desc,
+            "delivery_dt": delivery_dt,
+        })
+
+    records = []
+    for main_row, events in grouped.items():
+        completed_cols = set()
+        latest_completed_date = None
+        for event in events:
+            col_indices = event["station_def"][4]
+            completed_cols.update(col_indices)
+            completed_date = event["completed_date"]
+            if latest_completed_date is None or completed_date > latest_completed_date:
+                latest_completed_date = completed_date
+
+        # Next step: earliest remaining process date after all green-marked
+        # completions for this row. Same-date steps at a higher column number
+        # than the latest completed station are still "next" (not done).
+        max_completed_col = max(
+            c
+            for event in events
+            if event["completed_date"] == latest_completed_date
+            for c in event["station_def"][4]
+        )
         remaining = []
         for c in range(12, 36):
             if c in completed_cols:
@@ -1161,7 +1228,7 @@ def apply_completions(ws_main, completions):
             v = ws_main.cell(main_row, c).value
             if not isinstance(v, datetime) or c not in _COL_TO_DROPDOWN_STEP:
                 continue
-            if v > completed_date or (v == completed_date and c > max_completed_col):
+            if v > latest_completed_date or (v == latest_completed_date and c > max_completed_col):
                 remaining.append((v, c))
         remaining.sort()
 
@@ -1174,23 +1241,26 @@ def apply_completions(ws_main, completions):
             ws_main.cell(main_row, COL_CURRENT_STEP).value = "COMPLETE"
             ws_main.cell(main_row, COL_STATUS).value       = "COMPLETE"
 
-        label = STATION_NAME.get(s_key, s_key)
-        print(f"    WO {wo}  [{label}]  →  {next_step}")
+        for event in events:
+            comp = event["comp"]
+            s_key = comp["s_key"]
+            label = STATION_NAME.get(s_key, s_key)
+            print(f"    WO {event['wo']}  [{label}]  →  {next_step}")
 
-        records.append(dict(
-            date_completed = today,
-            wo             = wo,
-            company        = company,
-            part_no        = part_no,
-            desc           = desc,
-            process        = label,
-            due_date       = completed_date,
-            next_step      = next_step,
-            delivery_date  = delivery_dt,
-            updated_by     = comp.get("updated_by", ""),
-            updated_from   = comp.get("updated_from", ""),
-            owner_station  = label,
-        ))
+            records.append(dict(
+                date_completed = today,
+                wo             = event["wo"],
+                company        = event["company"],
+                part_no        = event["part_no"],
+                desc           = event["desc"],
+                process        = label,
+                due_date       = event["completed_date"],
+                next_step      = next_step,
+                delivery_date  = event["delivery_dt"],
+                updated_by     = comp.get("updated_by", ""),
+                updated_from   = comp.get("updated_from", ""),
+                owner_station  = label,
+            ))
 
     return records
 

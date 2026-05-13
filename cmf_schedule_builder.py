@@ -8,7 +8,7 @@ Flow:  MAIN → CALENDAR (production) + PURCHASING (outside/vendor work)
 Usage: python3 cmf_schedule_builder.py
 """
 
-import os, io, copy
+import os, io, copy, hashlib
 from collections import OrderedDict
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -736,6 +736,108 @@ def parse_main(ws):
                 ))
 
     return entries, row_to_img
+
+
+def _raw_image_bytes(img):
+    ref = getattr(img, "ref", None)
+    if hasattr(ref, "read"):
+        ref.seek(0)
+        raw = ref.read()
+        ref.seek(0)
+        return raw
+    return img._data()
+
+
+def _image_digest(raw):
+    return hashlib.sha256(raw).hexdigest()[:16] if raw else None
+
+
+def _worksheet_image_digests_by_anchor(ws):
+    images = defaultdict(list)
+    for img in getattr(ws, "_images", []):
+        try:
+            anchor = getattr(img, "anchor", None)
+            if not anchor or not hasattr(anchor, "_from"):
+                continue
+            row = anchor._from.row + 1
+            col = anchor._from.col + 1
+            digest = _image_digest(_raw_image_bytes(img))
+            if digest:
+                images[(row, col)].append(digest)
+        except Exception:
+            continue
+    return images
+
+
+def audit_board_images(wb, row_to_img, sheet_names=("CALENDAR", "PURCHASING")):
+    """Verify generated board photos still match each card's MAIN row ID."""
+    expected_by_main_row = {
+        main_row: _image_digest(raw)
+        for main_row, raw in row_to_img.items()
+        if raw
+    }
+    problems = []
+
+    for sheet_name in sheet_names:
+        if sheet_name not in wb.sheetnames:
+            continue
+        ws = wb[sheet_name]
+        anchored_images = _worksheet_image_digests_by_anchor(ws)
+        expected_photo_cells = set()
+        audited_cards = 0
+
+        for row in range(5, ws.max_row + 1):
+            col = 1
+            while col <= ws.max_column:
+                id_val = str(ws.cell(row, col).value or "")
+                if "|" not in id_val:
+                    col += 1
+                    continue
+
+                sub_n = _board_subcol_count(ws, col)
+                photo_offset = _board_header_offset(ws, col, sub_n, "PHOTO")
+                if photo_offset is None:
+                    problems.append(f"{sheet_name} R{row} C{col}: missing PHOTO header")
+                    col += sub_n + CAL_DIV_W
+                    continue
+
+                try:
+                    main_row = int(id_val.split("|", 1)[0])
+                except ValueError:
+                    problems.append(f"{sheet_name} R{row} C{col}: invalid card ID {id_val!r}")
+                    col += sub_n + CAL_DIV_W
+                    continue
+
+                photo_cell = (row, col + photo_offset)
+                expected_photo_cells.add(photo_cell)
+                expected = expected_by_main_row.get(main_row)
+                actual = anchored_images.get(photo_cell, [])
+                audited_cards += 1
+
+                if expected and expected not in actual:
+                    got = ",".join(actual) if actual else "missing"
+                    problems.append(
+                        f"{sheet_name} R{row} photo for MAIN row {main_row}: expected {expected}, got {got}"
+                    )
+                elif not expected and actual:
+                    problems.append(
+                        f"{sheet_name} R{row} photo for MAIN row {main_row}: unexpected image {','.join(actual)}"
+                    )
+
+                col += sub_n + CAL_DIV_W
+
+        extra_images = sorted(set(anchored_images) - expected_photo_cells)
+        for row, col in extra_images[:10]:
+            problems.append(f"{sheet_name} R{row} C{col}: image is not attached to a generated PHOTO cell")
+        if len(extra_images) > 10:
+            problems.append(f"{sheet_name}: {len(extra_images) - 10} additional non-card image(s)")
+
+        print(f"  IMAGE-AUDIT: {sheet_name} checked {audited_cards} card(s)")
+
+    if problems:
+        sample = "\n    ".join(problems[:20])
+        more = f"\n    ... {len(problems) - 20} more" if len(problems) > 20 else ""
+        raise RuntimeError(f"Board image audit failed:\n    {sample}{more}")
 
 
 # ── CALENDAR ─────────────────────────────────────────────────────────────────
@@ -1636,6 +1738,9 @@ if __name__ == "__main__":
 
     print("Building PURCHASING ...")
     build_purchasing(wb, entries, row_to_img)
+
+    print("Auditing board images ...")
+    audit_board_images(wb, row_to_img)
 
     print("Normalizing image anchors ...")
     normalize_image_anchors(wb)

@@ -49,25 +49,7 @@ _NAME_TO_KEY = {v.upper(): k for k, v in sb.STATION_NAME.items()}
 
 # ── Green detection (handles theme=6 AND explicit RGB) ───────────────────────
 def _is_green(cell):
-    try:
-        fill = cell.fill
-        if not fill or fill.fill_type != "solid":
-            return False
-        fg = fill.fgColor
-        if fg.type == "theme":
-            return int(fg.theme) == 6
-        rgb = str(fg.rgb or "")
-        if not rgb or rgb in ("00000000", "FF000000", "FFFFFFFF"):
-            return False
-        if len(rgb) == 8:
-            r, g, b = int(rgb[2:4], 16), int(rgb[4:6], 16), int(rgb[6:8], 16)
-        elif len(rgb) == 6:
-            r, g, b = int(rgb[0:2], 16), int(rgb[2:4], 16), int(rgb[4:6], 16)
-        else:
-            return False
-        return (g - b) > 30 and g > r and (r + g + b) // 3 < 200
-    except Exception:
-        return False
+    return sb._is_user_green(cell)
 
 
 # ── Parse source CALENDAR for green completions ───────────────────────────────
@@ -139,14 +121,15 @@ def parse_green_from_calendar(ws_cal, ws_main_src):
 
     else:
         # ── NEW layout: hidden ID column at offset 0 ──────────────────────
-        print("  Detected NEW calendar layout (8 sub-cols with hidden ID)")
+        print("  Detected NEW calendar layout (hidden ID column)")
         for row in range(5, ws_cal.max_row + 1):
             col = 1
             while col <= ws_cal.max_column:
                 id_val = str(ws_cal.cell(row, col).value or "")
                 if "|" in id_val:
+                    sub_n = sb._board_subcol_count(ws_cal, col)
                     block_green = any(_is_green(ws_cal.cell(row, col + off))
-                                      for off in range(1, sb.CAL_SUB_N))
+                                      for off in range(1, sub_n))
                     if block_green:
                         parts = id_val.split("|", 1)
                         if len(parts) == 2:
@@ -157,7 +140,9 @@ def parse_green_from_calendar(ws_cal, ws_main_src):
                                     completions.append({"main_row": key[0], "s_key": key[1]})
                             except ValueError:
                                 pass
-                col += sb.CAL_BLOCK
+                    col += sub_n + sb.CAL_DIV_W
+                    continue
+                col += 1
 
     print(f"  Green completions found: {len(completions)}")
     for c in completions:

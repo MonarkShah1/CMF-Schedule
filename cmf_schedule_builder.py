@@ -8,7 +8,7 @@ Flow:  MAIN → CALENDAR (production) + PURCHASING (outside/vendor work)
 Usage: python3 cmf_schedule_builder.py
 """
 
-import os, io, copy, hashlib
+import os, io, copy, hashlib, warnings
 from collections import OrderedDict
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -20,6 +20,13 @@ from openpyxl.drawing.image import Image as XLImage
 from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor
 from datetime import datetime, timedelta
 from collections import defaultdict
+
+warnings.filterwarnings(
+    "ignore",
+    message="Data Validation extension is not supported and will be removed",
+    category=UserWarning,
+    module="openpyxl.worksheet._reader",
+)
 
 FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'CMF WIP - Schedule.xlsx')
 
@@ -1186,7 +1193,7 @@ def _scan_green_completions_from_board(ws, sheet_name):
     filled in, we record it.
     """
     found = []
-    skipped_missing_name = []
+    missing_name = []
 
     for row in range(5, ws.max_row + 1):
         col = 1
@@ -1206,9 +1213,8 @@ def _scan_green_completions_from_board(ws, sheet_name):
                     if updated_by_offset is not None:
                         updated_by = str(ws.cell(row, col + updated_by_offset).value or "").strip()
                     if not updated_by:
-                        skipped_missing_name.append((row, col, id_val, green_fill))
-                        col += sub_n + CAL_DIV_W
-                        continue
+                        updated_by = "UNSPECIFIED"
+                        missing_name.append((row, col, id_val, green_fill))
 
                     parts = id_val.split("|", 1)
                     if len(parts) == 2:
@@ -1229,7 +1235,7 @@ def _scan_green_completions_from_board(ws, sheet_name):
                 continue
             col += 1
 
-    return found, skipped_missing_name
+    return found, missing_name
 
 
 def _build_main_row_index(ws_main):
@@ -1309,11 +1315,11 @@ def sync_green_completions(wb):
         if sheet_name not in wb.sheetnames:
             continue
 
-        sheet_found, skipped_missing_name = _scan_green_completions_from_board(wb[sheet_name], sheet_name)
+        sheet_found, missing_name = _scan_green_completions_from_board(wb[sheet_name], sheet_name)
         print(f"  GREEN-SYNC: {len(sheet_found)} completion(s) detected in {sheet_name}")
-        if skipped_missing_name:
-            print(f"  GREEN-SYNC: {len(skipped_missing_name)} green row(s) skipped in {sheet_name} — UPDATED BY is blank")
-            for _, _, id_val, green_fill in skipped_missing_name:
+        if missing_name:
+            print(f"  GREEN-SYNC: {len(missing_name)} green row(s) in {sheet_name} had blank UPDATED BY — using UNSPECIFIED")
+            for _, _, id_val, green_fill in missing_name:
                 if green_fill:
                     PENDING_GREEN_HIGHLIGHTS[id_val] = green_fill
 

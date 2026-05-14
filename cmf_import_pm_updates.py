@@ -19,7 +19,7 @@ Usage
     python3 cmf_import_pm_updates.py  "<source_file.xlsx>"
 """
 
-import os, sys, io, re
+import os, sys, io, re, warnings
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -29,6 +29,13 @@ from collections import defaultdict
 
 _DIR      = os.path.dirname(os.path.abspath(__file__))
 WORK_FILE = os.path.join(_DIR, "CMF WIP - Schedule.xlsx")
+
+warnings.filterwarnings(
+    "ignore",
+    message="Data Validation extension is not supported and will be removed",
+    category=UserWarning,
+    module="openpyxl.worksheet._reader",
+)
 
 # ── Import schedule builder constants & functions ─────────────────────────────
 sys.path.insert(0, _DIR)

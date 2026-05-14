@@ -31,12 +31,13 @@ CALENDAR and PURCHASING update automatically.
 1. Open `CMF WIP - Schedule.xlsx`
 2. Go to **CALENDAR** or **PURCHASING**
 3. Find the completed process card
-4. Select your name in **UPDATED BY**
+4. Select your name in **UPDATED BY** when possible
 5. Mark the card green
 6. Save and close Excel
 7. Run `Refresh Schedule.bat`
 
-The rebuild only advances MAIN when the card is green **and** UPDATED BY has a name.
+The rebuild advances MAIN when the card is green. If **UPDATED BY** is blank,
+the LOG records the completion as `UNSPECIFIED`.
 
 ---
 

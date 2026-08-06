@@ -55,15 +55,30 @@ the LOG records the completion as `UNSPECIFIED`.
 
 When the boss updates dates or adds new orders in the original WIP Google Sheets:
 
-1. Boss exports as `CMF WIP (1).xlsx` → saves to the folder
+> **Before you start:** delete the previous export so exactly one
+> `CMF WIP*.xlsx` is in the folder, and close Excel.
+
+1. Boss exports the Google Sheet → saves to the folder
 2. Engineer's latest Schedule file saved as `CMF WIP - Schedule (N).xlsx`
-3. Run:
+3. Preview the merge — nothing is overwritten:
+   ```
+   python3 cmf_merge.py --dry-run
+   ```
+4. Open `Merge Review.xlsx` and check the four sections: new WOs, removed WOs,
+   ship-date changes, parts still needing routing.
+   Confirm the "USING >" file in the console output is the export you meant.
+5. Apply:
    ```
    python3 cmf_merge.py
    python3 cmf_schedule_builder.py
    ```
-4. New orders appear in MAIN with blank routing (navy header + grey part rows)
-5. Engineer fills in routing for the new parts
+6. New orders appear in ADMIN INPUT with blank routing
+7. Engineer fills in routing; parts move to MAIN once they have a CURRENT STEP
+   and at least one process date
+8. Review, then push to OneDrive
+
+If anything looks wrong, restore the timestamped copy from `backups/` — one is
+written before every overwrite.
 
 ---
 

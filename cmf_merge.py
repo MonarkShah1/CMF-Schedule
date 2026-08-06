@@ -12,7 +12,7 @@ Matching logic:
   Secondary: WO# only     (for WO-level routing with no specific part#)
 """
 
-import os, io, re, sys
+import os, io, re, sys, shutil
 from collections import OrderedDict
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -25,6 +25,8 @@ from datetime import datetime
 
 _DIR      = os.path.dirname(os.path.abspath(__file__))
 OUT_FILE  = os.path.join(_DIR, 'CMF WIP - Schedule.xlsx')
+REVIEW_FILE = os.path.join(_DIR, 'Merge Review.xlsx')
+DRY_RUN   = "--dry-run" in sys.argv
 WIP_RE    = re.compile(r"^CMF WIP(?: \((\d+)\))?\.xlsx$")
 SCH_RE    = re.compile(r"^CMF WIP - Schedule(?: \((\d+)\))?\.xlsx$")
 
@@ -111,30 +113,66 @@ def _norm_key(val):
     return s or None
 
 
-def _pick_latest(pattern):
+def _backup_file(path):
+    """Copy path to a timestamped .bak before it gets overwritten.
+
+    Every merge/refresh rewrites the working file in place. Without this the
+    engineer's routing is unrecoverable if a run picks the wrong input or
+    misparses a row.
+    """
+    if not os.path.exists(path):
+        return None
+    backup_dir = os.path.join(_DIR, "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    base, ext = os.path.splitext(os.path.basename(path))
+    dest = os.path.join(backup_dir, f"{base}__{stamp}{ext}")
+    shutil.copy2(path, dest)
+    print(f"  Backup: backups/{os.path.basename(dest)}")
+    return dest
+
+
+def _pick_latest(pattern, label):
+    """Pick the most recently modified file matching pattern.
+
+    Selection is by modification time, NOT by the "(N)" suffix. The old
+    behaviour preferred the highest (N), so a fresh re-download named
+    "CMF WIP.xlsx" lost to a stale "CMF WIP (1).xlsx" from a previous week
+    and the merge silently ran on old orders.
+    """
     candidates = []
     for name in os.listdir(_DIR):
-        match = pattern.match(name)
-        if not match:
+        if not pattern.match(name):
             continue
         path = os.path.join(_DIR, name)
-        num = int(match.group(1)) if match.group(1) else -1
-        candidates.append((num, os.path.getmtime(path), path))
+        candidates.append((os.path.getmtime(path), path))
 
     if not candidates:
         raise FileNotFoundError(f"No files matched {pattern.pattern}")
 
-    numbered = [c for c in candidates if c[0] >= 0]
-    pool = numbered or candidates
-    return max(pool, key=lambda item: (item[0], item[1], item[2]))[2]
+    candidates.sort(reverse=True)
+    chosen_mtime, chosen = candidates[0]
+
+    print(f"  {label} candidates:")
+    for mtime, path in candidates:
+        mark = "USING >" if path == chosen else "       "
+        age = (datetime.now() - datetime.fromtimestamp(mtime)).total_seconds() / 3600
+        print(f"    {mark} {os.path.basename(path):<38} modified {datetime.fromtimestamp(mtime):%Y-%m-%d %H:%M} ({age:.1f}h ago)")
+
+    age_hours = (datetime.now() - datetime.fromtimestamp(chosen_mtime)).total_seconds() / 3600
+    if age_hours > 48:
+        print(f"    !! WARNING: newest {label} file is {age_hours/24:.1f} days old — is this the export you meant?")
+    if len(candidates) > 1 and abs(candidates[0][0] - candidates[1][0]) < 120:
+        print(f"    !! WARNING: two {label} files modified within 2 minutes — delete the one you don't want and re-run.")
+
+    return chosen
 
 
 def resolve_input_files():
-    if len(sys.argv) >= 3:
-        wip_path = os.path.abspath(sys.argv[1])
-        sch_path = os.path.abspath(sys.argv[2])
-        return wip_path, sch_path
-    return _pick_latest(WIP_RE), _pick_latest(SCH_RE)
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if len(args) >= 2:
+        return os.path.abspath(args[0]), os.path.abspath(args[1])
+    return _pick_latest(WIP_RE, "WIP"), _pick_latest(SCH_RE, "Schedule")
 
 
 def detect_schedule_layout(ws):
@@ -665,16 +703,42 @@ def merge():
     ws_out.freeze_panes = f"A{DATA}"
     ws_out.auto_filter.ref = f"A{HDR}:{LAST}{out_row - 1}"
 
+    # The working file stays clean — the change report goes to its own file so
+    # the reviewer has a diff to check instead of eyeballing the whole sheet.
     if "MERGE CHANGES" in wb_sch.sheetnames:
         del wb_sch["MERGE CHANGES"]
 
     print(f"\n  Result: {wo_count} WOs | {part_count} parts | "
           f"{routing_count} parts with routing | {img_count} screenshots")
     print(f"  Changes: {len(new_wos)} new WOs | {len(removed_wos)} removed WOs | {len(ship_date_updates)} ship date updates")
+
+    write_review_report(wip_path, sch_path, wip_summary_by_wo, sch_summary_by_wo,
+                        new_wos, removed_wos, ship_date_updates,
+                        routing_counts_by_wo, missing_routing_by_wo)
+
+    if DRY_RUN:
+        print(f"\nDRY RUN — nothing written to {os.path.basename(OUT_FILE)}")
+        print(f"Review {os.path.basename(REVIEW_FILE)}, then re-run without --dry-run.")
+        return
+
+    _backup_file(OUT_FILE)
     print(f"Saving → {OUT_FILE}")
     wb_sch.save(OUT_FILE)
     print("Done ✓\n")
-    print("Next: run  python3 cmf_schedule_builder.py  to rebuild CALENDAR + PURCHASING")
+    print(f"Next: review {os.path.basename(REVIEW_FILE)}, then run  python3 cmf_schedule_builder.py")
+
+
+def write_review_report(wip_path, sch_path, wip_summary_by_wo, sch_summary_by_wo,
+                        new_wos, removed_wos, ship_date_updates,
+                        routing_counts_by_wo, missing_routing_by_wo):
+    """Write the merge diff to a standalone workbook for the pre-push review step."""
+    wb = openpyxl.Workbook()
+    del wb[wb.sheetnames[0]]
+    build_change_log_sheet(wb, wip_path, sch_path, wip_summary_by_wo, sch_summary_by_wo,
+                           new_wos, removed_wos, ship_date_updates,
+                           routing_counts_by_wo, missing_routing_by_wo)
+    wb.save(REVIEW_FILE)
+    print(f"  Review report → {os.path.basename(REVIEW_FILE)}")
 
 
 if __name__ == "__main__":

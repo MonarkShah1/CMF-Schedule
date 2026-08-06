@@ -47,12 +47,50 @@ The old MAIN had one row per part-step (denormalized). The new format has one ro
 
 ---
 
+## cmf_dedupe_media.py
+**Runs automatically at the end of `cmf_schedule_builder.py`.**
+
+openpyxl stores one copy of an image per placement, so a screenshot shown on
+the MAIN row plus every CALENDAR and PURCHASING card is written dozens of times
+(measured: 920 stored parts for 139 unique images). This pass hashes the media,
+keeps one copy of each, and repoints the drawing relationships.
+
+Measured on the real workbook: **17.7 MB → 4.0 MB (77% smaller)**, with all 920
+image placements intact and 0 broken. Safe to re-run; stable across cycles.
+
+```bash
+python3 cmf_dedupe_media.py                 # the working file
+python3 cmf_dedupe_media.py other.xlsx      # any workbook
+```
+
+---
+
 ## cmf_merge.py
 **Run when boss sends an updated WIP file.**
 
 Takes two inputs:
 - `CMF WIP (1).xlsx` — boss's latest orders (old format)
 - `CMF WIP - Schedule (N).xlsx` — engineer's routing (new format)
+
+Inputs are chosen by **most recent modification time**, and the script prints
+every candidate plus the one it picked. It warns when the newest file is more
+than 48 hours old, or when two candidates were modified within 2 minutes —
+both signs the wrong export is about to be used.
+
+> Earlier versions picked by the highest `(N)` suffix, so a freshly downloaded
+> `CMF WIP.xlsx` silently lost to a stale `CMF WIP (1).xlsx`. See
+> [`POSTMORTEM.md`](POSTMORTEM.md).
+
+### Flags
+
+| Flag | Effect |
+|------|--------|
+| `--dry-run` | Writes `Merge Review.xlsx` and stops. Nothing is overwritten. |
+
+### Outputs
+
+- `CMF WIP - Schedule.xlsx` — merged result (a backup is written first)
+- `Merge Review.xlsx` — new WOs, removed WOs, ship-date changes, parts needing routing
 
 Merge logic:
 1. Re-migrates all orders from boss's file (gets new WOs, updated dates)

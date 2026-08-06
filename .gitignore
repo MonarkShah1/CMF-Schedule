@@ -2,6 +2,17 @@
 ~$*.xlsx
 *.xlsm
 
+# Safety backups written before every in-place overwrite
+backups/
+
+# Generated review report (regenerated on every merge)
+Merge Review.xlsx
+
+# Transient exports downloaded from the boss's Google Sheet
+CMF WIP.xlsx
+CMF WIP (*).xlsx
+CMF WIP - Schedule (*).xlsx
+
 # Python
 __pycache__/
 *.pyc

@@ -8,7 +8,7 @@ Flow:  MAIN → CALENDAR (production) + PURCHASING (outside/vendor work)
 Usage: python3 cmf_schedule_builder.py
 """
 
-import os, io, copy, hashlib, warnings
+import os, io, copy, hashlib, warnings, shutil
 from collections import OrderedDict
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -29,6 +29,36 @@ warnings.filterwarnings(
 )
 
 FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'CMF WIP - Schedule.xlsx')
+
+
+def backup_working_file(path=None, keep=30):
+    """Timestamped copy before the in-place overwrite. Keeps the last `keep`.
+
+    Every run rebuilds MAIN from parsed values and re-encodes every screenshot.
+    A bad parse is otherwise unrecoverable, which is what made refreshes scary.
+    """
+    path = path or FILE
+    if not os.path.exists(path):
+        return None
+    backup_dir = os.path.join(os.path.dirname(path), "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+    base, ext = os.path.splitext(os.path.basename(path))
+    dest = os.path.join(backup_dir, f"{base}__{datetime.now():%Y-%m-%d_%H%M%S}{ext}")
+    shutil.copy2(path, dest)
+
+    existing = sorted(
+        (os.path.join(backup_dir, n) for n in os.listdir(backup_dir)
+         if n.startswith(base + "__") and n.endswith(ext)),
+        key=os.path.getmtime,
+    )
+    for stale in existing[:-keep]:
+        try:
+            os.remove(stale)
+        except OSError:
+            pass
+
+    print(f"  Backup: backups/{os.path.basename(dest)}")
+    return dest
 
 # ── Palette ───────────────────────────────────────────────────────────────────
 C_NAVY     = "1F3864";  C_WHITE    = "FFFFFF"; C_GOLD = "FFD966"
@@ -1759,8 +1789,19 @@ if __name__ == "__main__":
     remaining = [ws for ws in wb.worksheets if ws.title not in desired_order]
     wb._sheets = ordered + remaining
 
+    backup_working_file()
     print(f"Saving   {FILE}")
     wb.save(FILE)
+
+    # openpyxl stores one media part per placed image, so the same screenshot is
+    # written once per card. Collapse the copies before the file hits OneDrive.
+    print("De-duplicating screenshots ...")
+    try:
+        from cmf_dedupe_media import dedupe
+        dedupe(FILE)
+    except Exception as exc:
+        print(f"  MEDIA-DEDUPE: skipped ({exc}) — workbook is still valid, just larger")
+
     print("Done ✓\n")
     print("  MAIN       → engineer fills routing (blue cols L–AJ) + screenshots (col I)")
     print("  CALENDAR   → one horizontal section per production step")

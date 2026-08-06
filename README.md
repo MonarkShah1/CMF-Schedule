@@ -42,6 +42,7 @@ Double-click **`Refresh Schedule.bat`**
 | `cmf_schedule_builder.py` | Rebuilds CALENDAR + PURCHASING from MAIN | Daily |
 | `cmf_migrate_main.py` | One-time migration from old WIP format | Once (already done) |
 | `cmf_merge.py` | Merges boss's WIP updates + engineer's routing | When boss sends new WIP |
+| `cmf_dedupe_media.py` | Collapses duplicate screenshots (~77% smaller file) | Automatic, after each build |
 | `Refresh Schedule.bat` | Windows double-click runner | Daily (Windows) |
 | `CMF WIP - Schedule.xlsx` | The working Excel file | Always open |
 
@@ -64,13 +65,28 @@ Double-click **`Refresh Schedule.bat`**
 
 ## When Boss Sends a New WIP File
 
+> **Keep exactly one `CMF WIP*.xlsx` in the folder.** Delete the previous export
+> before downloading a new one, and close Excel before running.
+
 ```bash
-# Put the new WIP file in the same folder, then:
+# 1. Preview — writes "Merge Review.xlsx", changes nothing
+python3 cmf_merge.py --dry-run
+
+# 2. Open "Merge Review.xlsx" and check:
+#    new WOs · removed WOs · ship-date changes · parts still needing routing
+
+# 3. Apply
 python3 cmf_merge.py
 python3 cmf_schedule_builder.py
 ```
 
 The merge script pulls new/updated orders from the boss's file and overlays the engineer's routing data.
+
+Both scripts write a timestamped copy to `backups/` before overwriting the
+working file, and print which input files they chose. If a run goes wrong,
+restore from `backups/`.
+
+See [`docs/POSTMORTEM.md`](docs/POSTMORTEM.md) for why these guardrails exist.
 
 ---
 

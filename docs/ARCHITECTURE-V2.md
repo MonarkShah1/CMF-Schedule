@@ -61,8 +61,11 @@ routing_steps                      -- ~821 rows, replaces the 24-col grid
   id, part_id, process_code, due_date,
   status(open|done), completed_by, completed_at
 
-shipments                          -- see "Shipping" below
-  id, work_order_id, shipped_date, qty, reference, notes, created_by
+shipments                          -- one release; see "Shipping" below
+  id, shipped_date, invoice_ref, notes, created_by, created_at
+
+shipment_lines                     -- shipping is PART level, not WO level
+  id, shipment_id, part_id, qty
 
 audit_log
   id, actor, entity, entity_id, action, before, after, at
@@ -118,24 +121,52 @@ Your manual refresh becomes an explicit action instead of a save-and-sync.
 
 ## Shipping — the open piece
 
-**Today:** when a PO ships, someone writes it into the Google Sheet. That is a
-*write path into the sheet*. Making the sheet read-only removes it, so the
-shipping update has to happen in the app first and mirror outward.
+### How it actually works today
 
-**Design:** shipping is a first-class event, not just a routing step. It needs a
-date and quantity, it must survive partial shipments, and it is the natural
-trigger for both the sheet mirror and eventual QuickBooks invoicing.
+- **There is no ship date column.** Nothing gets written when something ships.
+  The *row moving to HISTORY* is the entire record that it shipped.
+- **The trigger is invoicing.** The administrator invoices in QuickBooks;
+  invoiced means shipped, and the row comes off the WIP tracker.
+- **Shipping is part level**, and most POs go out in **multiple releases** —
+  so a WO is partly shipped for long stretches.
+- **HISTORY is the identical layout**, which is why moving a row is a copy-paste.
+
+Two consequences worth naming:
+
+1. **No ship date exists anywhere in your system.** Not in the active tab, not
+   in HISTORY. So on-time delivery genuinely cannot be computed from the sheet
+   — it isn't a matter of nothing reading it, the data was never captured. The
+   only place a real ship date exists today is the QuickBooks invoice date.
+2. **Partial releases are invisible.** A row sits in the active tab, fully
+   present, whether zero or 80% of its quantity has gone out. Nothing shows
+   remaining balance until the last release drops it into HISTORY.
+
+### Design
+
+Shipping is a first-class event recorded at part level, with releases as
+first-class rows:
 
 ```
-Administrator opens the WO  →  "Record shipment"
-   shipped_date, qty, reference/packing slip, notes
+Administrator invoices in QuickBooks
         ↓
-   row written to `shipments`
+Opens the WO  →  "Record shipment"
+   shipped_date, invoice_ref, then per part: qty this release
         ↓
-   WO status → 'shipped' when total shipped qty >= ordered qty
+   shipments + shipment_lines rows written
         ↓
-   mirror pushes ship date + status to the Google Sheet
+   part fully shipped  when SUM(shipment_lines.qty) >= parts.qty
+   WO   status='shipped' when every part is fully shipped
+        ↓
+   mirror moves the row from the active tab to HISTORY
 ```
+
+`invoice_ref` is the link back to QuickBooks. Capturing it by hand now costs the
+administrator a few seconds and becomes the reconciliation key if the QuickBooks
+agent is ever built.
+
+**New capability this unlocks:** a part-level shipped/remaining balance, so the
+board can show "40 of 100 shipped" instead of a row that looks untouched until
+the day it disappears.
 
 `SHIP` already exists in the current CURRENT STEP dropdown, so shipping is
 partly modelled as a routing step today. Keeping a `SHIP` routing step for
@@ -155,11 +186,16 @@ disappear from the schedule. Combined with the stale-file bug fixed earlier
 (where a week-old export could be picked silently), this could resurrect shipped
 orders and drop live ones in the same run.
 
-**2. Your real delivery performance is invisible to the system.**
-`cmf_customer_report.py` computes on-time percentage from **LOG completions** —
-whether *process steps* hit their due dates. Actual ship date versus promised
-customer ship date lives in the HISTORY tab, which nothing in this codebase
-reads. The number on the customer report is a proxy, not on-time delivery.
+**2. Your real delivery performance cannot be computed at all.**
+`cmf_customer_report.py` derives on-time percentage from **LOG completions** —
+whether *process steps* hit their due dates. That is a proxy for on-time
+delivery, not the thing itself. And it can't be corrected from the sheet,
+because **no ship date is recorded anywhere** — not in the active tab, not in
+HISTORY. The only place a true ship date exists is the QuickBooks invoice.
+
+From cutover onward v2 captures `shipments.shipped_date`, so the real metric
+starts accumulating immediately. Backfilling history would require reading
+QuickBooks invoice dates (see below).
 
 **In v2, history is a status, not a location.** Nothing moves.
 
@@ -184,22 +220,16 @@ GROUP BY company;
 That is the metric the customer report has been approximating. The mirror keeps
 pushing shipped rows to the HISTORY tab so the boss's sheet looks unchanged.
 
-### Confirm before building
+### Confirmed
 
-1. **Which column** in the boss's sheet receives the ship update? The current
-   pipeline reads only columns A, B, D, G, H, I, J, K, L, N, O — **C, E, F, and
-   M are ignored entirely.** If shipping lands in one of those, the automation
-   has never seen it, which may itself explain some drift.
-2. **Who** records the shipment — administrator, or a shipping clerk who'd need
-   their own login?
-3. **Partial shipments** — does a WO ever ship in multiple releases? The schema
-   above assumes yes. If it's always all-or-nothing, `shipments` collapses to
-   two fields on `work_orders`.
-4. **Ship at PO level or part level?** Modelled at WO/PO level above, matching
-   how the sheet appears to work.
-5. **What does the HISTORY tab hold** that the active tab doesn't — an actual
-   ship date, carrier, invoice number? That determines whether `shipments`
-   needs more fields, and it is the data the on-time metric should be using.
+| Question | Answer |
+|---|---|
+| Which column receives the ship update? | **None.** Moving the row to HISTORY *is* the record. |
+| Who records the shipment? | The administrator |
+| What triggers it? | **Invoicing in QuickBooks** — invoiced means shipped |
+| Partial shipments? | **Yes** — most POs ship in multiple releases |
+| Ship level? | **Part level** |
+| HISTORY layout? | Identical to the active tab — a copy-paste |
 
 ---
 
@@ -247,6 +277,36 @@ QB Desktop (shop PC)
 that creates draft work orders, with the manual entry form as its first client.
 A QuickBooks agent later becomes a second client of the same endpoint. No
 rewrite.
+
+### When you do build it, read invoices first — not orders
+
+Your answer that **invoicing is the ship trigger** changes the priority. The
+original plan was to pull *orders* out of QuickBooks. Pulling **invoices** is a
+better first integration on every axis:
+
+| | Order ingestion | **Invoice ingestion** |
+|---|---|---|
+| Direction | Read | **Read only** — never writes to QuickBooks |
+| Risk to accounting data | Low | **None** |
+| Query | Complex, needs mapping to parts | `InvoiceQuery` by date range |
+| Replaces | Admin typing new orders | **Admin manually moving rows to HISTORY** |
+| Also gives you | — | **Real ship dates → true on-time delivery** |
+
+A read-only invoice pull via the SDK (`InvoiceQuery`) or a QODBC read is about
+the smallest useful QuickBooks Desktop integration that exists, and it closes
+the loop that is currently manual:
+
+```
+QB Desktop invoice created
+   └── local agent polls InvoiceQuery (read-only)
+          └── HTTPS  →  POST /api/shipments/from-invoice
+                 └── matches invoice_ref → shipment_lines → parts shipped
+                        └── mirror moves the row to HISTORY automatically
+```
+
+If the agent is never built, nothing breaks — the administrator keeps recording
+shipments by hand, exactly as today, and `invoice_ref` is already there as the
+matching key.
 
 **Also worth checking:** Intuit has been sunsetting QuickBooks Desktop in favour
 of QuickBooks Online, which *does* have a clean REST API. Confirm where your
@@ -302,5 +362,7 @@ only happens if QuickBooks is still on Desktop and still worth it.
 | Shop floor needs a PC with Excel | Any browser, including a tablet at standup |
 | "Shipped" and "missing" look identical | An explicit `shipped` status |
 | Shipped POs moved by hand to HISTORY | A consequence of recording the shipment |
+| No ship date captured anywhere | `shipments.shipped_date` from day one |
+| Partial releases invisible on the board | Part-level shipped/remaining balance |
 | On-time % derived from step completions | Real ship date vs promised date |
 | QuickBooks integration impossible | A documented endpoint waiting for it |

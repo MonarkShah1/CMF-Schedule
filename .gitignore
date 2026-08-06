@@ -25,3 +25,6 @@ __pycache__/
 # Windows
 Thumbs.db
 desktop.ini
+
+# v2 migration artifacts
+v2/screenshots/

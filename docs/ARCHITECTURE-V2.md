@@ -308,6 +308,86 @@ If the agent is never built, nothing breaks — the administrator keeps recordin
 shipments by hand, exactly as today, and `invoice_ref` is already there as the
 matching key.
 
+---
+
+## Scheduled CSV pull from QuickBooks — the practical version
+
+**Yes, this works, and it is the right instinct.** A scheduled CSV drop sidesteps
+the Web Connector entirely, which is what failed last time. But the difficulty
+is not where it looks.
+
+### Extraction is the easy half. Matching is the hard half.
+
+A QuickBooks invoice line says something like `"BRACKET-A / 40 / Acme Mfg"`.
+Your schedule says part `4518-02` on WO `4518` for `ACME MANUFACTURING`. Nothing
+automatically connects those. **The administrator currently does this matching
+in their head** when deciding which row to move to HISTORY — an automation has
+to do it explicitly, and this is where these integrations actually fail.
+
+So the design needs:
+
+- A **mapping table** (`qb_item_map`, `qb_customer_map`) built once and edited in
+  the app when new items appear
+- A **review queue** for lines that don't match cleanly
+- **Auto-apply only on exact, unambiguous matches** — everything else waits for
+  the administrator
+
+Given the system has already burned you once with silent automation, nothing
+here removes a row from the active board without either a confident match or a
+human confirming it.
+
+### How the CSV gets produced — three options
+
+| Option | Effort | Cost | Reliability |
+|---|---|---|---|
+| **Manual export to a watched folder** | None | Free | High — admin does ~3 clicks |
+| **QODBC driver + Task Scheduler** | Low | ~$300+ | High — read-only SQL against QB |
+| **QB SDK script (`InvoiceQuery`)** | Medium | Free | High once authorized |
+
+Notes worth knowing before choosing:
+
+- QuickBooks Desktop's built-in **Scheduled Reports emails PDFs, not CSV** — it
+  does not solve this on its own.
+- **QODBC** is the pragmatic pick: a read-only SQL query dumped to CSV by a
+  Windows Scheduled Task. No UI scripting, no Web Connector.
+- **UI-automation tools (AutoIt and similar) are a trap** — they break on every
+  QuickBooks update and need the machine unlocked.
+- Any option needs the shop PC on, and unattended SDK access must be granted
+  once during authorization.
+
+### Build the ingestion side first — it is source-agnostic
+
+```
+[ manual export | QODBC | SDK ]  →  invoices.csv
+                                        ↓
+                         POST /api/shipments/import-csv
+                                        ↓
+                    match invoice lines → parts (mapping table)
+                          ↓                        ↓
+                  confident match            ambiguous
+                          ↓                        ↓
+                  create shipment          review queue
+                          ↓
+                  mirror moves row to HISTORY
+```
+
+Define the CSV contract — `invoice_no, invoice_date, customer, po_number,
+item, qty` — and build the endpoint. Then **start with the manual export**:
+the administrator exports the invoice report and drops it in a folder. Zero
+QuickBooks technical risk, and everything downstream is already automated.
+
+Swapping to QODBC or the SDK later changes only how the file appears. Nothing
+downstream moves.
+
+### On the 5-hour interval
+
+Fine. Shipping and invoicing happen in business hours and nothing downstream is
+latency-sensitive — a shipment landing three hours late costs nothing. Run it a
+few times during the working day rather than around the clock. Make the import
+**idempotent on `invoice_no`** so re-importing an overlapping window is a no-op;
+that matters more than the frequency, because it means a missed or repeated run
+is harmless.
+
 **Also worth checking:** Intuit has been sunsetting QuickBooks Desktop in favour
 of QuickBooks Online, which *does* have a clean REST API. Confirm where your
 version sits on that timeline before investing in a Desktop-only integration —
@@ -317,7 +397,14 @@ it may decide this for you.
 
 ## Migration off the current workbook
 
-The existing `CMF WIP - Schedule.xlsx` is the source. A one-time importer:
+**Two sources**, because active work and shipped work live in different places:
+
+| Source | Holds |
+|---|---|
+| `CMF WIP - Schedule.xlsx` | Active work — routing detail, screenshots, LOG |
+| Google Sheet **HISTORY** tab | Shipped jobs — same layout, no routing detail |
+
+One-time importer:
 
 1. Parse MAIN → `work_orders` + `parts` (reuse the existing row-kind logic)
 2. Walk the 24 process columns → **821 `routing_steps` rows**
@@ -325,7 +412,21 @@ The existing `CMF WIP - Schedule.xlsx` is the source. A one-time importer:
 4. Derive step status from CURRENT STEP + the date-based rule already in
    `parse_main()`
 5. Import the LOG sheet → `audit_log` so completion history survives
-6. Reconcile: part count, step count, and image count must match the workbook
+6. **Import the HISTORY tab → `work_orders` with `status='shipped'`**
+7. Reconcile: part count, step count, and image count must match the workbook
+
+### On the HISTORY import
+
+Shipped rows come in as `status='shipped'` with **no `shipments` rows** — there
+is no ship date to attach, so inventing one would be worse than leaving it
+empty. They arrive as searchable job history: who ordered what, which parts,
+what quantities, what the promised date was.
+
+That means on-time metrics start from cutover, not from your back catalogue.
+The only way to backfill real ship dates is QuickBooks invoice dates — see
+below. `shipments.shipped_date` being nullable-by-absence keeps that door open:
+a later invoice import can attach shipment records to already-imported history
+without a schema change.
 
 Run it against a copy, compare against the live sheet, then cut over. Keep the
 Excel export so nobody loses the artifact they're used to.
@@ -340,12 +441,15 @@ Excel export so nobody loses the artifact they're used to.
 | 2 | Order entry (admin) + routing entry (engineer) + release gate |
 | 3 | CALENDAR + PURCHASING views — the 10-minute standup board |
 | 4 | Mark-complete + LOG/sign-off |
-| 5 | Shipping + Google Sheets mirror |
+| 5 | Shipping (part-level releases) + Google Sheets mirror |
 | 6 | Excel export button |
-| 7 | *(later)* QuickBooks agent against the phase-2 ingestion endpoint |
+| 7 | CSV invoice import endpoint + mapping table + review queue |
+| 8 | *(optional)* QODBC or SDK agent to produce the CSV on a schedule |
 
 Phases 1–4 replace what hurts daily. Phase 5 closes the shipping loop. Phase 7
-only happens if QuickBooks is still on Desktop and still worth it.
+is the QuickBooks work that matters — and it runs off a **manually exported
+CSV**, so it needs no QuickBooks integration at all. Phase 8 only automates
+where that file comes from, and is genuinely optional.
 
 ---
 

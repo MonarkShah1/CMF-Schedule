@@ -9,4 +9,4 @@ python-multipart>=0.0.9  # form posts
 
 # dev
 pytest>=8.0
-httpx>=0.27              # required by fastapi TestClient
+httpx2>=0.28              # required by fastapi/starlette TestClient

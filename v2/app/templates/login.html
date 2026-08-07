@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block content %}
+<div class="login-wrap">
+  <form method="post" action="/login" class="card form login-card">
+    <h1>CMF Schedule</h1>
+    <p class="lede">Sign in to see the production board.</p>
+
+    {% if error %}<div class="banner banner-warn">Wrong password — try again.</div>{% endif %}
+
+    <label>Your name
+      <input name="name" placeholder="so completions are recorded against you"></label>
+    <label>Team password
+      <input type="password" name="password" required autofocus></label>
+    <input type="hidden" name="next" value="{{ next }}">
+    <div class="actions"><button class="btn btn-primary">Sign in</button></div>
+  </form>
+</div>
+{% endblock %}

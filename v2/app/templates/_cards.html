@@ -1,0 +1,46 @@
+{% macro cards(items, today) %}
+<div class="cards">
+  {% for r in items %}
+    <article class="card-step {% if r.due_date and r.due_date < today %}is-overdue
+              {% elif r.due_date == today %}is-today{% endif %}">
+      {% if r.screenshot_id %}
+        <a href="/screenshot/{{ r.screenshot_id }}" target="_blank" class="shot">
+          <img src="/screenshot/{{ r.screenshot_id }}" alt="" loading="lazy">
+        </a>
+      {% else %}
+        <div class="shot shot-none">no photo</div>
+      {% endif %}
+
+      <div class="card-body">
+        <div class="card-top">
+          <span class="proc-chip {% if r.process_code in ('LASER_CUT_O','TUBE_LASER_O','BANDSAW_O','MACHINE_O','PLATING_O','PAINT_O','SPECIAL_O','WHOLE_JOB_O','SHIP_VENDOR') %}proc-chip-out{% endif %}">
+            {{ r.process_name }}</span>
+          <span class="due mono">{{ r.due_date.strftime('%d %b') if r.due_date else '—' }}</span>
+        </div>
+
+        <div class="card-main">
+          <a class="mono wo" href="/orders/{{ r.work_order_id }}">{{ r.wo_number }}</a>
+          <span class="company">{{ r.company or '' }}</span>
+        </div>
+
+        <div class="card-part">
+          {% if r.part_number %}<b class="mono">{{ r.part_number }}</b>{% endif %}
+          {% if r.description %}<span class="desc">{{ r.description }}</span>{% endif %}
+          {% if r.qty %}<span class="qty">×{{ r.qty|int }}</span>{% endif %}
+        </div>
+
+        <div class="card-foot">
+          {% if r.cust_ship_date %}
+            <span title="customer ship date">ship
+              {{ r.cust_ship_date.strftime('%d %b') }}</span>
+          {% endif %}
+          {% if r.delivery_date %}
+            <span title="delivery date" class="dim">del
+              {{ r.delivery_date.strftime('%d %b') }}</span>
+          {% endif %}
+        </div>
+      </div>
+    </article>
+  {% endfor %}
+</div>
+{% endmacro %}

@@ -14,14 +14,16 @@ Run:
 """
 
 import os
-from datetime import datetime
+from collections import OrderedDict
+from urllib.parse import quote
+from datetime import datetime, date, timedelta
 
 from fastapi import FastAPI, Form, Request, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import db
+from . import auth, db
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -30,6 +32,56 @@ app.mount("/static", StaticFiles(directory=os.path.join(_HERE, "static")), name=
 templates = Jinja2Templates(directory=os.path.join(_HERE, "templates"))
 
 ACTOR_COOKIE = "cmf_actor"
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    """Gate every page behind the team password when one is configured."""
+    if auth.enabled() and not auth.is_public(request.url.path):
+        if not auth.read_session(request.cookies.get(auth.SESSION_COOKIE, "")):
+            if request.method == "GET":
+                nxt = request.url.path
+                if request.url.query:
+                    nxt += "?" + request.url.query
+                return RedirectResponse(f"/login?next={quote(nxt, safe='')}",
+                                        status_code=303)
+            return Response("Session expired — reload and sign in again.",
+                            status_code=401)
+    return await call_next(request)
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_form(request: Request, next: str = "/", error: str = ""):
+    if not auth.enabled():
+        return RedirectResponse("/", status_code=303)
+    return templates.TemplateResponse(
+        request, "login.html",
+        {"request": request, "next": next, "error": error, "actor": ""})
+
+
+@app.post("/login")
+def login(request: Request, password: str = Form(""), name: str = Form(""),
+          next: str = Form("/")):
+    if not auth.password_ok(password):
+        return RedirectResponse(
+            f"/login?next={quote(next, safe='')}&error=1", status_code=303)
+
+    target = next if next.startswith("/") and not next.startswith("//") else "/"
+    resp = RedirectResponse(target, status_code=303)
+    resp.set_cookie(auth.SESSION_COOKIE, auth.make_session(name.strip()),
+                    max_age=auth.SESSION_DAYS * 86400, httponly=True,
+                    samesite="lax", secure=request.url.scheme == "https")
+    if name.strip():
+        resp.set_cookie(ACTOR_COOKIE, name.strip(),
+                        max_age=auth.SESSION_DAYS * 86400, samesite="lax")
+    return resp
+
+
+@app.post("/logout")
+def logout():
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(auth.SESSION_COOKIE)
+    return resp
 
 
 def actor(request: Request) -> str:
@@ -354,3 +406,95 @@ def unrelease(request: Request, wo_id: int):
 def health():
     row = db.query_one("SELECT count(*) AS n FROM work_orders")
     return {"status": "ok", "work_orders": row["n"], "at": datetime.now().isoformat()}
+
+
+# ── Boards (phase 3) ──────────────────────────────────────────────────────────
+
+BOARD_WINDOW_DAYS = 28   # rolling 4-week window, matching the workbook
+
+
+def _board_rows(view, days, process=None, company=None):
+    """Open steps from v_calendar / v_purchasing, split into overdue and window.
+
+    The views carry no date window on purpose — data has no window, boards do.
+    """
+    where, params = [], []
+    if process:
+        where.append("process_code = %s")
+        params.append(process)
+    if company:
+        where.append("company = %s")
+        params.append(company)
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
+
+    rows = db.query(f"""
+        SELECT * FROM {view} {clause}
+        ORDER BY due_date NULLS LAST, process_name, wo_number""", params)
+
+    horizon = date.today() + timedelta(days=days)
+    overdue = [r for r in rows if r["due_date"] and r["due_date"] < date.today()]
+    current = [r for r in rows if r["due_date"] and
+               date.today() <= r["due_date"] <= horizon]
+    later = [r for r in rows if not r["due_date"] or r["due_date"] > horizon]
+    return rows, overdue, current, later
+
+
+def _group_by_process(rows):
+    out = OrderedDict()
+    for r in rows:
+        out.setdefault(r["process_name"], []).append(r)
+    return out
+
+
+def _group_by_day(rows):
+    out = OrderedDict()
+    for r in rows:
+        out.setdefault(r["due_date"], []).append(r)
+    return out
+
+
+@app.get("/board", response_class=HTMLResponse)
+def board(request: Request, process: str = "", company: str = "",
+          days: int = BOARD_WINDOW_DAYS, group: str = "day"):
+    """CALENDAR — the 10-minute standup board."""
+    rows, overdue, current, later = _board_rows("v_calendar", days, process, company)
+    grouped = _group_by_day(current) if group == "day" else _group_by_process(current)
+
+    return render(request, "board.html",
+                  title="Calendar", view="calendar", board_url="/board",
+                  rows=rows, overdue=overdue, grouped=grouped, later=later,
+                  group=group, days=days, process=process, company=company,
+                  processes=db.query("SELECT * FROM processes WHERE NOT is_outside "
+                                     "ORDER BY sort_order"),
+                  companies=db.query("SELECT DISTINCT company FROM v_calendar "
+                                     "WHERE company IS NOT NULL ORDER BY company"),
+                  today=date.today())
+
+
+@app.get("/purchasing", response_class=HTMLResponse)
+def purchasing(request: Request, process: str = "", company: str = "",
+               days: int = BOARD_WINDOW_DAYS, group: str = "process"):
+    """PURCHASING — all open outside/vendor work."""
+    rows, overdue, current, later = _board_rows("v_purchasing", days, process, company)
+    grouped = _group_by_day(current) if group == "day" else _group_by_process(current)
+
+    return render(request, "board.html",
+                  title="Purchasing", view="purchasing", board_url="/purchasing",
+                  rows=rows, overdue=overdue, grouped=grouped, later=later,
+                  group=group, days=days, process=process, company=company,
+                  processes=db.query("SELECT * FROM processes WHERE is_outside "
+                                     "ORDER BY sort_order"),
+                  companies=db.query("SELECT DISTINCT company FROM v_purchasing "
+                                     "WHERE company IS NOT NULL ORDER BY company"),
+                  today=date.today())
+
+
+@app.get("/screenshot/{screenshot_id}")
+def screenshot(screenshot_id: int):
+    """Images come from Postgres — no object storage in the deployment."""
+    row = db.query_one("SELECT content_type, bytes FROM screenshots WHERE id = %s",
+                       (screenshot_id,))
+    if not row:
+        raise HTTPException(404, "Screenshot not found")
+    return Response(content=bytes(row["bytes"]), media_type=row["content_type"],
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})

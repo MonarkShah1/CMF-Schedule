@@ -98,6 +98,16 @@ def _as_num(v):
         return None
 
 
+def _sniff_content_type(raw):
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if raw[:2] == b"\xff\xd8":
+        return "image/jpeg"
+    if raw[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    return "application/octet-stream"
+
+
 def _row_kind(ws, row):
     """header | part | blank — matches _main_row_kind() in the builder."""
     wo = ws.cell(row, COL_WO).value
@@ -379,14 +389,13 @@ def reconcile(orders, part_images, stats, log_rows, employees, history_stats):
 
 # ── Load ──────────────────────────────────────────────────────────────────────
 
-def load_postgres(url, orders, part_images, log_rows, employees, image_dir):
+def load_postgres(url, orders, part_images, log_rows, employees, image_dir=None):
     try:
         import psycopg
     except ImportError:
         sys.exit("psycopg not installed.  pip install 'psycopg[binary]'")
 
-    os.makedirs(image_dir, exist_ok=True)
-    written = {}
+    written = {}   # digest -> screenshots.id
 
     with psycopg.connect(url) as conn, conn.cursor() as cur:
         for name in employees:
@@ -410,26 +419,33 @@ def load_postgres(url, orders, part_images, log_rows, employees, image_dir):
             wo_id = cur.fetchone()[0]
 
             for idx, p in enumerate(o["parts"]):
-                url_path = None
+                shot_id = None
                 raw = part_images.get((wo, idx))
                 if raw:
                     digest = hashlib.md5(raw).hexdigest()
                     if digest not in written:
-                        path = os.path.join(image_dir, f"{digest}.png")
-                        with open(path, "wb") as fh:
-                            fh.write(raw)
-                        written[digest] = path
-                    url_path = f"screenshots/{digest}.png"
+                        # ON CONFLICT makes the dedup structural: the same photo
+                        # can never be stored twice, however many parts show it.
+                        cur.execute(
+                            """INSERT INTO screenshots (digest, content_type,
+                                                        byte_size, bytes)
+                               VALUES (%s,%s,%s,%s)
+                               ON CONFLICT (digest) DO UPDATE
+                                 SET digest = EXCLUDED.digest
+                               RETURNING id""",
+                            (digest, _sniff_content_type(raw), len(raw), raw))
+                        written[digest] = cur.fetchone()[0]
+                    shot_id = written[digest]
 
                 cur.execute(
                     """INSERT INTO parts
                          (work_order_id, line_no, part_number, description, qty,
-                          material, thickness, screenshot_url, notes,
+                          material, thickness, screenshot_id, notes,
                           delivery_date, legacy_current_step)
                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                        RETURNING id""",
                     (wo_id, idx + 1, p["part_number"], p["description"], p["qty"],
-                     p["material"], p["thickness"], url_path, p["notes"],
+                     p["material"], p["thickness"], shot_id, p["notes"],
                      p.get("delivery_date"), p["legacy_current_step"]))
                 part_id = cur.fetchone()[0]
 
@@ -450,7 +466,10 @@ def load_postgres(url, orders, part_images, log_rows, employees, image_dir):
 
         conn.commit()
 
-    print(f"  Loaded.  {len(written)} unique screenshot(s) → {image_dir}")
+    total = sum(len(b) for b in {hashlib.md5(v).hexdigest(): v
+                                 for v in part_images.values()}.values())
+    print(f"  Loaded.  {len(written)} unique screenshot(s) stored in Postgres "
+          f"({total/1e6:.1f} MB)")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -460,7 +479,6 @@ def main():
     ap.add_argument("--workbook", default=DEFAULT_WORKBOOK)
     ap.add_argument("--history", help="Google Sheets HISTORY export (xlsx), same layout")
     ap.add_argument("--database-url", default=os.environ.get("DATABASE_URL"))
-    ap.add_argument("--image-dir", default=os.path.join(_ROOT, "v2", "screenshots"))
     ap.add_argument("--dry-run", action="store_true", help="Parse and reconcile only")
     ap.add_argument("--out", help="Write parsed JSON here (dry run)")
     args = ap.parse_args()
@@ -541,8 +559,7 @@ def main():
         return 0 if ok else 1
 
     print(f"Loading into {args.database_url.split('@')[-1]}")
-    load_postgres(args.database_url, orders, part_images, log_rows,
-                  employees, args.image_dir)
+    load_postgres(args.database_url, orders, part_images, log_rows, employees)
     return 0 if ok else 1
 
 

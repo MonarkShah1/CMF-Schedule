@@ -1,0 +1,53 @@
+# CMF Schedule — infrastructure as code.
+#
+# This file provisions the entire system. In Render: New → Blueprint, point it
+# at this repository, and it builds the web service and the database from here.
+# There is nothing to configure by hand except the team password.
+#
+# Full walkthrough: docs/GO-LIVE.md
+
+databases:
+  - name: cmf-db
+    databaseName: cmf
+    user: cmf
+    plan: basic-256mb          # ~$6/mo. Holds the schedule and all screenshots.
+    postgresMajorVersion: "16"
+
+services:
+  - type: web
+    name: cmf-schedule
+    runtime: python
+    plan: starter              # ~$7/mo. Does not sleep, unlike the free plan.
+    region: ohio
+    branch: main
+    healthCheckPath: /health
+
+    buildCommand: pip install -r v2/requirements.txt
+
+    # Runs after the build, before traffic switches over. Applies the schema on
+    # the first deploy and imports the workbook only into an empty database.
+    preDeployCommand: python3 v2/deploy_setup.py
+
+    startCommand: >
+      uvicorn v2.app.main:app --host 0.0.0.0 --port $PORT
+      --workers 2 --proxy-headers --forwarded-allow-ips '*'
+
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: cmf-db
+          property: connectionString
+
+      # Signs session cookies. Render generates this — nobody ever sees it.
+      - key: SECRET_KEY
+        generateValue: true
+
+      # The one thing you set by hand: the password your team types to sign in.
+      - key: APP_PASSWORD
+        sync: false
+
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+
+      - key: TZ
+        value: America/Toronto

@@ -146,3 +146,68 @@ tbody tr:hover { background: var(--blue-lt); }
   .whoami { margin-left: 0; width: 100%; }
   table { display: block; overflow-x: auto; }
 }
+
+/* ── Boards (phase 3) ────────────────────────────────────────────────── */
+.board-head { display: flex; justify-content: space-between; align-items: flex-start;
+              gap: 16px; flex-wrap: wrap; }
+.board-toggle { display: flex; gap: 6px; }
+.filters select { padding: 6px 10px; border: 1px solid var(--line);
+                  border-radius: 4px; background: #fff; font-size: 13px;
+                  font-family: inherit; color: var(--ink); max-width: 220px; }
+
+.bucket { margin: 20px 0; }
+.bucket-head { display: flex; align-items: center; gap: 9px; margin: 0 0 10px;
+               font-size: 13px; text-transform: uppercase; letter-spacing: .06em;
+               color: var(--steel); border-bottom: 2px solid var(--line);
+               padding-bottom: 6px; }
+.bucket-head .count { background: var(--line); color: var(--ink); font-size: 11px;
+                      padding: 1px 7px; border-radius: 9px; }
+.overdue-head { color: var(--danger); border-bottom-color: #f0c4c4; }
+.overdue-head .count { background: #fde0e0; color: var(--danger); }
+.clear-head { color: var(--ok); border-bottom-color: #9ad3ad; }
+.tag-today { background: var(--steel); color: #fff; }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+         gap: 10px; }
+.card-step { display: flex; gap: 10px; background: #fff; border: 1px solid var(--line);
+             border-left: 3px solid var(--steel); border-radius: 6px;
+             padding: 9px; overflow: hidden; }
+.card-step.is-overdue { border-left-color: var(--danger); background: #fffafa; }
+.card-step.is-today   { border-left-color: var(--gold); background: #fffdf5; }
+
+.shot { flex: 0 0 62px; width: 62px; height: 62px; border-radius: 4px;
+        overflow: hidden; border: 1px solid var(--line); background: #f7f9fb;
+        display: flex; align-items: center; justify-content: center; }
+.shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.shot-none { font-size: 9px; color: #b6bfc9; text-align: center; line-height: 1.2; }
+
+.card-body { flex: 1 1 auto; min-width: 0; }
+.card-top { display: flex; justify-content: space-between; align-items: center;
+            gap: 6px; margin-bottom: 3px; }
+.proc-chip { background: var(--blue-lt); color: var(--steel); font-size: 10px;
+             font-weight: 700; padding: 1px 6px; border-radius: 3px;
+             text-transform: uppercase; letter-spacing: .03em; white-space: nowrap;
+             overflow: hidden; text-overflow: ellipsis; }
+.proc-chip-out { background: #ffedd5; color: #c2410c; }
+.due { font-size: 12px; font-weight: 700; white-space: nowrap; }
+.is-overdue .due { color: var(--danger); }
+
+.card-main { display: flex; gap: 6px; align-items: baseline; font-size: 13px; }
+.card-main .wo { font-weight: 700; text-decoration: none; color: var(--navy); }
+.card-main .company { color: var(--dim); font-size: 12px; overflow: hidden;
+                      text-overflow: ellipsis; white-space: nowrap; }
+.card-part { font-size: 12px; margin-top: 2px; display: flex; gap: 5px;
+             flex-wrap: wrap; align-items: baseline; }
+.card-part .desc { color: var(--dim); }
+.card-part .qty  { color: var(--ink); font-weight: 600; }
+.card-foot { margin-top: 4px; font-size: 11px; color: var(--dim);
+             display: flex; gap: 9px; }
+
+.later { margin-top: 22px; }
+.later summary { cursor: pointer; color: var(--steel); font-size: 13px;
+                 padding: 8px 0; font-weight: 600; }
+
+/* ── Login ───────────────────────────────────────────────────────────── */
+.login-wrap { display: flex; justify-content: center; padding-top: 40px; }
+.login-card { width: 100%; max-width: 380px; }
+.login-card h1 { margin-bottom: 2px; }

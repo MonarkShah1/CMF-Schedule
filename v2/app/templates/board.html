@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% import "_cards.html" as c %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+
+<div class="board-head">
+  <div>
+    <h1>{{ title }}</h1>
+    <p class="lede">
+      {{ rows|length }} open step{{ '' if rows|length == 1 else 's' }} ·
+      next {{ days }} days
+      {% if view == 'purchasing' %}· outside / vendor work only{% endif %}
+    </p>
+  </div>
+  <div class="board-toggle">
+    <a class="chip {% if group=='day' %}on{% endif %}"
+       href="{{ board_url }}?group=day&days={{ days }}&process={{ process }}&company={{ company }}">By day</a>
+    <a class="chip {% if group=='process' %}on{% endif %}"
+       href="{{ board_url }}?group=process&days={{ days }}&process={{ process }}&company={{ company }}">By station</a>
+  </div>
+</div>
+
+<form method="get" class="filters">
+  <input type="hidden" name="group" value="{{ group }}">
+  <select name="process" onchange="this.form.submit()">
+    <option value="">All stations</option>
+    {% for p in processes %}
+      <option value="{{ p.code }}" {% if process==p.code %}selected{% endif %}>{{ p.name }}</option>
+    {% endfor %}
+  </select>
+  <select name="company" onchange="this.form.submit()">
+    <option value="">All customers</option>
+    {% for c in companies %}
+      <option value="{{ c.company }}" {% if company==c.company %}selected{% endif %}>{{ c.company }}</option>
+    {% endfor %}
+  </select>
+  <select name="days" onchange="this.form.submit()">
+    {% for d in [7, 14, 28, 56] %}
+      <option value="{{ d }}" {% if days==d %}selected{% endif %}>{{ d }} days</option>
+    {% endfor %}
+  </select>
+  {% if process or company %}
+    <a class="btn btn-sm" href="{{ board_url }}?group={{ group }}&days={{ days }}">Clear</a>
+  {% endif %}
+</form>
+
+{# ── Overdue: always visible, top of board ───────────────────────────────── #}
+{% if overdue %}
+  <section class="bucket bucket-overdue">
+    <h2 class="bucket-head overdue-head">
+      Overdue <span class="count">{{ overdue|length }}</span>
+    </h2>
+    {{ c.cards(overdue, today) }}
+  </section>
+{% else %}
+  <section class="bucket">
+    <h2 class="bucket-head clear-head">Nothing overdue — all clear</h2>
+  </section>
+{% endif %}
+
+{# ── The rolling window ──────────────────────────────────────────────────── #}
+{% for key, items in grouped.items() %}
+  <section class="bucket">
+    <h2 class="bucket-head">
+      {% if group == 'day' %}
+        {{ key.strftime('%a %d %b') }}
+        {% if key == today %}<span class="tag tag-today">today</span>{% endif %}
+      {% else %}
+        {{ key }}
+      {% endif %}
+      <span class="count">{{ items|length }}</span>
+    </h2>
+    {{ c.cards(items, today) }}
+  </section>
+{% else %}
+  {% if not overdue %}
+    <p class="empty">Nothing scheduled in this window.</p>
+  {% endif %}
+{% endfor %}
+
+{% if later %}
+  <details class="later">
+    <summary>{{ later|length }} step{{ '' if later|length == 1 else 's' }}
+             beyond {{ days }} days</summary>
+    {{ c.cards(later, today) }}
+  </details>
+{% endif %}
+
+{% endblock %}

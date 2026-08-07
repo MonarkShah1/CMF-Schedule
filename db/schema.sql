@@ -77,6 +77,24 @@ CREATE INDEX idx_wo_ship    ON work_orders (cust_ship_date);
 -- parts
 -- ─────────────────────────────────────────────────────────────────────────────
 
+-- Screenshots live in the database, not object storage.
+--
+-- The whole library is 139 unique images totalling 4.2 MB. At that size a
+-- bytea column costs nothing, and it removes an entire external service (S3 /
+-- Supabase Storage) plus its credentials from the deployment. Backups include
+-- the images automatically.
+--
+-- The digest is the dedup key: the workbook stored one photo up to 153 times,
+-- and this makes that structurally impossible.
+CREATE TABLE screenshots (
+    id            BIGSERIAL PRIMARY KEY,
+    digest        TEXT      NOT NULL UNIQUE,
+    content_type  TEXT      NOT NULL DEFAULT 'image/png',
+    byte_size     INT       NOT NULL,
+    bytes         BYTEA     NOT NULL
+);
+
+
 CREATE TABLE parts (
     id              BIGSERIAL PRIMARY KEY,
     work_order_id   BIGINT    NOT NULL REFERENCES work_orders (id) ON DELETE CASCADE,
@@ -86,7 +104,7 @@ CREATE TABLE parts (
     qty             NUMERIC(12, 2),
     material        TEXT,
     thickness       TEXT,
-    screenshot_url  TEXT,
+    screenshot_id   BIGINT    REFERENCES screenshots (id),
     notes           TEXT,
 
     -- Reference date shown on every board row, NOT a process step. Modelling it
@@ -267,6 +285,7 @@ SELECT
     rs.due_date,
     pr.code         AS process_code,
     pr.name         AS process_name,
+    w.id            AS work_order_id,
     w.wo_number,
     w.po_number,
     w.company,
@@ -276,13 +295,13 @@ SELECT
     p.description,
     p.qty,
     p.delivery_date,
-    p.screenshot_url
+    p.screenshot_id
 FROM routing_steps rs
 JOIN parts       p  ON p.id = rs.part_id
 JOIN work_orders w  ON w.id = p.work_order_id
 JOIN processes   pr ON pr.code = rs.process_code
 WHERE rs.status = 'open'
-  AND w.status IN ('draft', 'released')
+  AND w.status = 'released'   -- draft work has not cleared the release gate
   AND pr.is_outside = FALSE;
 
 
@@ -293,6 +312,7 @@ SELECT
     rs.due_date,
     pr.code         AS process_code,
     pr.name         AS process_name,
+    w.id            AS work_order_id,
     w.wo_number,
     w.po_number,
     w.company,
@@ -302,13 +322,13 @@ SELECT
     p.description,
     p.qty,
     p.delivery_date,
-    p.screenshot_url
+    p.screenshot_id
 FROM routing_steps rs
 JOIN parts       p  ON p.id = rs.part_id
 JOIN work_orders w  ON w.id = p.work_order_id
 JOIN processes   pr ON pr.code = rs.process_code
 WHERE rs.status = 'open'
-  AND w.status IN ('draft', 'released')
+  AND w.status = 'released'   -- draft work has not cleared the release gate
   AND pr.is_outside = TRUE;
 
 

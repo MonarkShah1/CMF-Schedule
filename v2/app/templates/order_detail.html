@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}WO {{ wo.wo_number }}{% endblock %}
+{% block content %}
+
+<div class="wo-head">
+  <div>
+    <h1>WO <span class="mono">{{ wo.wo_number }}</span>
+      <span class="pill pill-{{ wo.status }}">{{ wo.status }}</span></h1>
+    <p class="lede">
+      {{ wo.company or 'No company' }}
+      {% if wo.po_number %} · PO <span class="mono">{{ wo.po_number }}</span>{% endif %}
+      {% if wo.job_name %} · {{ wo.job_name }}{% endif %}
+      {% if wo.cust_ship_date %} · ship {{ wo.cust_ship_date.strftime('%b %d, %Y') }}{% endif %}
+    </p>
+  </div>
+
+  <div class="wo-actions">
+    {% if wo.status == 'draft' %}
+      {% if blockers %}
+        <button class="btn" disabled title="Route every part first">Release</button>
+      {% else %}
+        <form method="post" action="/orders/{{ wo.id }}/release">
+          <button class="btn btn-primary">Release to production</button>
+        </form>
+      {% endif %}
+    {% elif wo.status == 'released' %}
+      <form method="post" action="/orders/{{ wo.id }}/unrelease">
+        <button class="btn">Pull back to draft</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if wo.status == 'draft' %}
+  {% if blockers %}
+    <div class="banner banner-warn">
+      <b>Not ready to release.</b>
+      <ul>
+        {% for b in blockers %}
+          <li>{% if b.line_no %}Line {{ b.line_no }}
+              — {{ b.part_number or b.description or 'unnamed part' }}:
+              {% endif %}{{ b.reason }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% else %}
+    <div class="banner banner-ok">
+      Every part is routed. Ready to release.
+    </div>
+  {% endif %}
+{% endif %}
+
+<h2>Parts <span class="dim">({{ parts|length }})</span></h2>
+
+<table>
+  <thead>
+    <tr><th class="num">#</th><th>Part</th><th>Description</th><th class="num">Qty</th>
+        <th>Material</th><th>Routing</th><th>Next due</th><th>Delivery</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for p in parts %}
+    <tr>
+      <td class="num dim">{{ p.line_no }}</td>
+      <td class="mono">{{ p.part_number or '' }}</td>
+      <td>{{ p.description or '' }}</td>
+      <td class="num">{{ p.qty|int if p.qty else '' }}</td>
+      <td class="dim">{{ p.material or '' }}{% if p.thickness %} · {{ p.thickness }}{% endif %}</td>
+      <td>
+        {% if p.step_count %}
+          <span class="dim">{{ p.done_count }}/{{ p.step_count }} done</span>
+          {% for s in steps.get(p.id, []) %}
+            <span class="step {% if s.status == 'done' %}step-done{% endif %}
+                              {% if s.is_outside %}step-out{% endif %}"
+                  title="{{ s.due_date }}">{{ s.process_name }}</span>
+          {% endfor %}
+        {% else %}
+          <span class="warn">not routed</span>
+        {% endif %}
+      </td>
+      <td class="mono">{{ p.next_due.strftime('%b %d') if p.next_due else '' }}</td>
+      <td class="mono dim">{{ p.delivery_date.strftime('%b %d') if p.delivery_date else '' }}</td>
+      <td class="row-actions">
+        <a class="btn btn-sm" href="/parts/{{ p.id }}/routing">Route</a>
+        <form method="post" action="/parts/{{ p.id }}/delete"
+              onsubmit="return confirm('Delete line {{ p.line_no }}? This also removes its routing.')">
+          <button class="btn btn-sm btn-danger">Delete</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="9" class="empty">No parts yet — add the first one below.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>Add a part</h2>
+<form method="post" action="/orders/{{ wo.id }}/parts" class="card form">
+  <div class="grid3">
+    <label>Part # <input name="part_number"></label>
+    <label>Description <input name="description"></label>
+    <label>Qty <input name="qty" type="number" step="any"></label>
+    <label>Material <input name="material"></label>
+    <label>Thickness <input name="thickness"></label>
+    <label>Delivery date <input type="date" name="delivery_date"></label>
+  </div>
+  <p class="hint">A part needs at least a part number or a description.
+     Part numbers are not required to be unique — the sheet uses profile codes
+     like <span class="mono">CH</span> across many lines.</p>
+  <div class="actions"><button class="btn btn-primary">Add part</button></div>
+</form>
+
+{% endblock %}

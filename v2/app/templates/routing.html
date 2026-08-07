@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Routing — {{ part.part_number or part.description }}{% endblock %}
+{% block content %}
+
+<h1>Routing</h1>
+<p class="lede">
+  WO <span class="mono">{{ part.wo_number }}</span> · line {{ part.line_no }} ·
+  <b>{{ part.part_number or part.description or 'unnamed part' }}</b>
+  {% if part.qty %} · qty {{ part.qty|int }}{% endif %}
+  {% if part.company %} · {{ part.company }}{% endif %}
+  {% if part.cust_ship_date %} · customer ship
+    {{ part.cust_ship_date.strftime('%b %d, %Y') }}{% endif %}
+</p>
+
+<div class="banner">
+  Enter a due date only for the steps this part actually goes through — an
+  average part uses about 3 of 24. Blank means the part skips that step.
+  Clearing a date removes the step, except where it is already marked done.
+</div>
+
+<form method="post" action="/parts/{{ part.id }}/routing" class="card form">
+
+  <h2>In-house</h2>
+  <div class="proc-grid">
+    {% for pr in processes if not pr.is_outside %}
+      {% set ex = existing.get(pr.code) %}
+      <label class="proc {% if ex and ex.status == 'done' %}proc-done{% endif %}">
+        <span class="proc-name">
+          {{ pr.name }}
+          {% if ex and ex.status == 'done' %}<span class="tick">done</span>{% endif %}
+        </span>
+        <input type="date" name="due_{{ pr.code }}"
+               value="{{ ex.due_date if ex and ex.due_date else '' }}"
+               {% if ex and ex.status == 'done' %}readonly{% endif %}>
+      </label>
+    {% endfor %}
+  </div>
+
+  <h2>Outside / vendor <span class="dim">— these feed the purchasing board</span></h2>
+  <div class="proc-grid">
+    {% for pr in processes if pr.is_outside %}
+      {% set ex = existing.get(pr.code) %}
+      <label class="proc proc-outside {% if ex and ex.status == 'done' %}proc-done{% endif %}">
+        <span class="proc-name">
+          {{ pr.name }}
+          {% if ex and ex.status == 'done' %}<span class="tick">done</span>{% endif %}
+        </span>
+        <input type="date" name="due_{{ pr.code }}"
+               value="{{ ex.due_date if ex and ex.due_date else '' }}"
+               {% if ex and ex.status == 'done' %}readonly{% endif %}>
+      </label>
+    {% endfor %}
+  </div>
+
+  <h2>Delivery</h2>
+  <label class="proc">
+    <span class="proc-name">Delivery date
+      <span class="dim">— a reference date, not a board step</span></span>
+    <input type="date" name="delivery_date"
+           value="{{ part.delivery_date if part.delivery_date else '' }}">
+  </label>
+
+  <div class="actions">
+    <button class="btn btn-primary">Save routing</button>
+    <a class="btn" href="/orders/{{ part.wo_id }}">Back to work order</a>
+  </div>
+</form>
+
+{% endblock %}

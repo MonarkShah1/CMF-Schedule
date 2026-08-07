@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}CMF Schedule{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">CMF <span>Schedule</span></a>
+    <nav>
+      <a href="/">Work Orders</a>
+      <a href="/orders/new" class="btn btn-primary btn-sm">+ New Order</a>
+    </nav>
+    <form class="whoami" method="post" action="/whoami">
+      <label for="actor-name">You</label>
+      <input id="actor-name" name="name" value="{{ actor if actor != 'UNSPECIFIED' else '' }}"
+             placeholder="your name" list="employee-list">
+      <datalist id="employee-list">
+        {% for e in employees|default([]) %}<option value="{{ e.name }}">{% endfor %}
+      </datalist>
+      <button class="btn btn-sm">Set</button>
+    </form>
+  </header>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

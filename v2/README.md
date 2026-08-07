@@ -1,33 +1,96 @@
-# v2 — Phase 1: schema + importer
+# v2 — Phases 1–2
 
 Replaces the Excel-on-OneDrive system. See
 [`../docs/ARCHITECTURE-V2.md`](../docs/ARCHITECTURE-V2.md) for the full design and
 [`../docs/POSTMORTEM.md`](../docs/POSTMORTEM.md) for why.
 
-Phase 1 is the database schema and the one-time migration off the workbook.
-No application yet.
+| Phase | Status |
+|---|---|
+| 1 — schema + importer | **done** |
+| 2 — order entry, routing entry, release gate | **done** |
+| 3 — CALENDAR + PURCHASING boards | next |
+| 4 — mark complete + sign-off | |
+| 5 — shipping + Google Sheets mirror | |
+| 6 — Excel export | |
+| 7 — CSV invoice import + review queue | |
+
+No build step. One Python process plus Postgres — no npm, no bundler.
 
 ---
 
 ## Try it
 
 ```bash
-pip install openpyxl 'psycopg[binary]'
+pip install -r v2/requirements.txt
 
-# Parse and reconcile only — touches no database
-python3 v2/import_workbook.py --dry-run
-
-# Inspect exactly what would be loaded
-python3 v2/import_workbook.py --dry-run --out /tmp/import.json
-
-# For real
 createdb cmf
 psql cmf -f db/schema.sql
+
+# Migrate off the workbook — parse and reconcile first, touching nothing
+python3 v2/import_workbook.py --dry-run
 python3 v2/import_workbook.py --database-url postgresql:///cmf
 
 # With the Google Sheets HISTORY export
-python3 v2/import_workbook.py --history "CMF WIP - HISTORY.xlsx" --database-url postgresql:///cmf
+python3 v2/import_workbook.py --history "CMF WIP - HISTORY.xlsx" \
+                             --database-url postgresql:///cmf
+
+# Run the app
+DATABASE_URL=postgresql:///cmf uvicorn v2.app.main:app --reload
+#   → http://127.0.0.1:8000
+
+# Tests (needs a database with the schema applied)
+DATABASE_URL=postgresql:///cmf pytest v2/tests -q
 ```
+
+---
+
+## Phase 2 — what it does
+
+| Route | Who | Purpose |
+|---|---|---|
+| `/` | everyone | Work order list, filter by status, search |
+| `/orders/new` | administrator | Create an order — lands as **draft** |
+| `/orders/{id}` | administrator | Add and remove parts |
+| `/parts/{id}/routing` | engineer | Set due dates per process |
+| `/orders/{id}/release` | engineer | **Release gate** — draft → released |
+
+### The release gate
+
+The workbook moved parts between ADMIN INPUT and MAIN automatically, based on
+whether they had a CURRENT STEP and a process date. Clear a field and a part
+silently teleported out of MAIN — work appeared to vanish.
+
+Here the gate is explicit:
+
+- A work order releases only when **every** part has at least one routing step
+- When it can't, the page names the exact lines that are blocking it
+- The Release button is disabled rather than failing after the click
+- Release is **reversible** — "pull back to draft" needs no database surgery
+- Every release, un-release and routing change lands in `audit_log`
+
+### Verified
+
+19 tests pass against a real Postgres, and the full workflow was driven through
+a real browser end to end: create order → blocked (no parts) → add part →
+blocked (no routing, line named) → route → "ready to release" → released.
+
+Behaviours covered by tests:
+
+- an order with no parts, or any unrouted part, cannot be released
+- one unrouted part blocks the whole order, and is named
+- release is reversible; double-release is rejected
+- blank dates create no routing step; clearing a date removes the step
+- **a completed step survives a cleared date** — completion history is never
+  silently discarded
+- delivery date never becomes a routing step
+- duplicate part numbers within a work order are accepted (`CH` × 18 is real)
+- deleting a part removes its routing
+
+### Not yet real
+
+Identity is a name in a cookie, used for `audit_log` attribution. It is not
+authentication and enforces no permissions. Real auth comes with the boards,
+when there is something worth protecting.
 
 ---
 
@@ -99,4 +162,4 @@ source sheet, so `line_no` is carried through the migration.
 
 ## Next
 
-Phase 2 — order entry, routing entry, and the release gate.
+Phase 3 — the CALENDAR and PURCHASING boards for the 10-minute standup.

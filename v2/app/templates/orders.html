@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Work Orders</h1>
+
+<div class="filters">
+  <a href="/" class="chip {% if not status %}on{% endif %}">All</a>
+  <a href="/?status=draft" class="chip {% if status=='draft' %}on{% endif %}">
+    Draft <b>{{ counts.get('draft', 0) }}</b></a>
+  <a href="/?status=released" class="chip {% if status=='released' %}on{% endif %}">
+    Released <b>{{ counts.get('released', 0) }}</b></a>
+  <a href="/?status=shipped" class="chip {% if status=='shipped' %}on{% endif %}">
+    Shipped <b>{{ counts.get('shipped', 0) }}</b></a>
+  <form method="get" class="search">
+    {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+    <input name="q" value="{{ q }}" placeholder="WO, PO, company, job">
+    <button class="btn btn-sm">Search</button>
+  </form>
+</div>
+
+<table>
+  <thead>
+    <tr><th>WO</th><th>PO</th><th>Company</th><th>Job</th>
+        <th>Cust Ship</th><th class="num">Parts</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+  {% for o in orders %}
+    <tr>
+      <td><a class="mono" href="/orders/{{ o.id }}">{{ o.wo_number }}</a></td>
+      <td class="mono dim">{{ o.po_number or '' }}</td>
+      <td>{{ o.company or '' }}</td>
+      <td class="dim">{{ o.job_name or '' }}</td>
+      <td class="mono nowrap">{{ o.cust_ship_date.strftime('%d %b %Y') if o.cust_ship_date else '' }}</td>
+      <td class="num nowrap">
+        {{ o.part_count }}
+        {% if o.unrouted_parts %}
+          <div class="tag tag-warn" title="parts with no routing steps">
+            {{ o.unrouted_parts }} unrouted</div>
+        {% endif %}
+      </td>
+      <td><span class="pill pill-{{ o.status }}">{{ o.status }}</span></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="empty">No work orders match.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

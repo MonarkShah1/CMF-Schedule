@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>New Work Order</h1>
+<p class="lede">Created as <b>draft</b>. It reaches the production board only
+   once the engineer has routed every part and released it.</p>
+
+<form method="post" action="/orders" class="card form">
+  <div class="grid2">
+    <label>WO # <span class="req">required</span>
+      <input name="wo_number" required autofocus></label>
+    <label>PO # <input name="po_number"></label>
+    <label>Company <input name="company"></label>
+    <label>Customer ship date <input type="date" name="cust_ship_date"></label>
+  </div>
+  <label>Job name <input name="job_name"></label>
+  <div class="actions">
+    <button class="btn btn-primary">Create</button>
+    <a href="/" class="btn">Cancel</a>
+  </div>
+</form>
+{% endblock %}

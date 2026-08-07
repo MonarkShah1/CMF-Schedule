@@ -369,6 +369,19 @@ def reconcile(orders, part_images, stats, log_rows, employees, history_stats):
 
     check("routing cells == routing_steps", stats["routing_cells"] == steps,
           f"  ({stats['routing_cells']} vs {steps})")
+
+    # openpyxl needs Pillow to read images and returns none without it, so a
+    # zero here means a broken environment, not a workbook without photos.
+    try:
+        import PIL  # noqa: F401
+        has_pillow = True
+    except ImportError:
+        has_pillow = False
+    check("Pillow installed (openpyxl needs it for images)", has_pillow,
+          "" if has_pillow else "  -> pip install Pillow")
+    if has_pillow and stats["part_rows"]:
+        check("screenshots were extracted", len(part_images) > 0,
+              f"  ({len(part_images)} found — 0 means images were silently dropped)")
     check("part rows == parts", stats["part_rows"] == parts,
           f"  ({stats['part_rows']} vs {parts})")
     check("every part has a work order",

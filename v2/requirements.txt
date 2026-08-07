@@ -1,5 +1,8 @@
 # CMF Schedule v2
 openpyxl>=3.1            # workbook import (phase 1), Excel export (phase 6)
+Pillow>=10.0             # REQUIRED by openpyxl to read images. Without it
+                         # openpyxl silently returns zero images and the import
+                         # "succeeds" with no screenshots at all.
 psycopg[binary]>=3.1     # Postgres driver
 psycopg_pool>=3.2        # connection pooling
 fastapi>=0.110

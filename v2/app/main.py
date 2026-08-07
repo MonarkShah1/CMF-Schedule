@@ -13,6 +13,7 @@ Run:
     DATABASE_URL=postgresql:///cmf uvicorn v2.app.main:app --reload
 """
 
+import json
 import os
 from collections import OrderedDict
 from urllib.parse import quote
@@ -404,8 +405,26 @@ def unrelease(request: Request, wo_id: int):
 
 @app.get("/health")
 def health():
-    row = db.query_one("SELECT count(*) AS n FROM work_orders")
-    return {"status": "ok", "work_orders": row["n"], "at": datetime.now().isoformat()}
+    """Liveness only — deliberately does NOT touch the database.
+
+    The host uses this to decide whether a deploy succeeded and whether to keep
+    the service running. Querying Postgres here means a momentary database blip
+    fails the deploy or restarts a healthy web process. Use /health/db for the
+    deeper check.
+    """
+    return {"status": "ok", "at": datetime.now().isoformat()}
+
+
+@app.get("/health/db")
+def health_db():
+    """Readiness — reports on the database without being the liveness probe."""
+    try:
+        row = db.query_one("SELECT count(*) AS n FROM work_orders")
+        return {"status": "ok", "work_orders": row["n"]}
+    except Exception as exc:
+        return Response(
+            content=json.dumps({"status": "error", "detail": str(exc)[:300]}),
+            status_code=503, media_type="application/json")
 
 
 # ── Boards (phase 3) ──────────────────────────────────────────────────────────
